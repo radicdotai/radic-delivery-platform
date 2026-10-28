@@ -1,10 +1,11 @@
 # engine
 
 The `radic-delivery` CLI: the single supported code path for inspecting and
-validating this platform's service descriptors and policy exceptions, and
-for evaluating a service's CI quality gate. See `specs/001-engine-scaffold/`
-and `specs/002-ci-gate-workflow/` for the full specification, plan, and
-design rationale behind this package.
+validating this platform's service descriptors and policy exceptions, for
+evaluating a service's CI quality gate, and for scanning a service for
+security findings. See `specs/001-engine-scaffold/`,
+`specs/002-ci-gate-workflow/`, and `specs/003-security-scanning/` for the
+full specification, plan, and design rationale behind this package.
 
 ## Command surface
 
@@ -14,6 +15,7 @@ radic-delivery descriptor show <path>                   # implemented
 radic-delivery policy exceptions check <id>              # implemented
 radic-delivery gate evaluate --mode ci-gate <...>         # implemented
 radic-delivery gate evaluate --mode release-gate <...>    # not implemented yet (reports as such)
+radic-delivery security scan --scope source|iac|all <...> # implemented (report-only — never blocks)
 
 radic-delivery notes ...        # not implemented yet
 radic-delivery tests ...        # not implemented yet
@@ -33,6 +35,17 @@ tests, the descriptor's coverage floor, and the zero-skip-budget rule
 `policy/exceptions.yml` with `scope: quality.unit.skip`). It never calls
 `gcloud` or any GCP API. See `specs/002-ci-gate-workflow/data-model.md` for
 the full `GateResult` shape.
+
+`security scan` runs `gitleaks` (hardcoded secrets), `hadolint`
+(Dockerfile lint), and `trivy` in config-scanning mode (Dockerfile/IaC
+misconfiguration — only when a Dockerfile actually exists on disk at the
+descriptor's declared path), and reports every finding, severity-classified,
+in one `SecurityScanResult`. This is the report-only rollout phase: **a
+finding, at any severity, never fails this command** — the only way it
+exits non-zero is the descriptor itself failing validation, before any scan
+runs. Container-image scanning and Snyk are always reported as
+`not_available`, never silently omitted — see
+`specs/003-security-scanning/data-model.md` for the full result shape.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

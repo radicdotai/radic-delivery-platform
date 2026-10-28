@@ -1,0 +1,105 @@
+name: security
+
+# The platform's central security scanning reusable workflow (Reference 2:
+# Workflow Contracts and Caller Templates). Report-only for this feature
+# (specs/003-security-scanning): a finding, at any severity, never fails
+# this job. The only way this job fails is the same way `ci-gate` already
+# can — the service's own descriptor being invalid — which is a broken
+# setup, not a scanning result, so it is deliberately NOT swallowed here.
+#
+# Image scanning and Snyk are not implemented yet; every scan result says
+# so explicitly (see engine/README.md) rather than omitting them.
+
+on:
+  workflow_call:
+    inputs:
+      scope:
+        description: "Which scope(s) to scan: source, iac, or all."
+        type: string
+        default: all
+      image_ref:
+        description: "Accepted for contract compatibility; unused — image scanning is not implemented yet."
+        type: string
+        default: ""
+      enforce:
+        description: "Accepted for contract compatibility; unused — this feature never blocks on findings."
+        type: boolean
+        default: false
+      fail_on:
+        description: "Accepted for contract compatibility; unused — this feature never blocks on findings."
+        type: string
+        default: ""
+    outputs:
+      scan_result:
+        description: "Always 'completed' — this is a report-only phase (see spec FR-006)."
+        value: ${{ jobs.scan.outputs.scan_result }}
+      sbom_uri:
+        description: "Not implemented yet by this platform (always 'not_available')."
+        value: ${{ jobs.scan.outputs.sbom_uri }}
+      findings_critical:
+        description: "Count of critical-severity findings."
+        value: ${{ jobs.scan.outputs.findings_critical }}
+      findings_high:
+        description: "Count of high-severity findings."
+        value: ${{ jobs.scan.outputs.findings_high }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    outputs:
+      scan_result: ${{ steps.scan.outputs.scan_result }}
+      sbom_uri: ${{ steps.scan.outputs.sbom_uri }}
+      findings_critical: ${{ steps.scan.outputs.findings_critical }}
+      findings_high: ${{ steps.scan.outputs.findings_high }}
+    steps:
+      - name: Checkout calling service repo
+        uses: actions/checkout@v4
+
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Setup security scanning tools
+        uses: ./actions/setup-security-tools
+
+      - name: Run the security scan
+        id: scan
+        run: |
+          set -euo pipefail
+          uv run --project "${{ steps.engine.outputs.engine-project }}" \
+            radic-delivery security scan \
+            --scope "${{ inputs.scope }}" \
+            --format json > security-result.json
+
+          {
+            jq -r '"scan_result=" + .scan_result' security-result.json
+            echo "sbom_uri=not_available"
+            jq -r '"findings_critical=" + (.counts.critical | tostring)' security-result.json
+            jq -r '"findings_high=" + (.counts.high | tostring)' security-result.json
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write the findings report
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Security scan (report-only — no finding blocks this PR)"
+            echo
+            echo "| Severity | Count |"
+            echo "|---|---|"
+            jq -r '.counts | to_entries[] | "| \(.key) | \(.value) |"' security-result.json
+            echo
+            echo "| Scope | Status |"
+            echo "|---|---|"
+            jq -r '.scopes[] | "| \(.scope) | \(.status) |"' security-result.json
+            echo
+            if [ "$(jq '[.scopes[].findings[]] | length' security-result.json)" != "0" ]; then
+              echo "| Tool | Severity | File | Line | Description |"
+              echo "|---|---|---|---|---|"
+              jq -r '.scopes[].findings[] | "| \(.tool) | \(.severity) | \(.file) | \(.line // "-") | \(.description) |"' security-result.json
+            else
+              echo "_No findings._"
+            fi
+            echo
+            echo "_Image scanning and Snyk are not implemented yet by this platform._"
+          } >> "$GITHUB_STEP_SUMMARY"

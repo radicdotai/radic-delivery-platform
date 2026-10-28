@@ -26,6 +26,8 @@ from radic_delivery.gate.evaluator import evaluate as evaluate_gate
 from radic_delivery.gate.result import GateResult
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
+from radic_delivery.security.aggregator import scan as scan_security
+from radic_delivery.security.result import SecurityScanResult
 
 app = typer.Typer(
     name="radic-delivery",
@@ -169,6 +171,62 @@ def gate_evaluate(
     # policy rejection, distinct from the descriptor itself being malformed
     # (that case already exited INVALID_INPUT above, before any check ran).
     raise typer.Exit(code=int(ExitCode.POLICY_FAILURE))
+
+
+# --- security ------------------------------------------------------------
+
+security_app = typer.Typer(help="Scan a service for security findings (report-only).")
+app.add_typer(security_app, name="security")
+
+
+class SecurityScope(StrEnum):
+    source = "source"
+    iac = "iac"
+    all = "all"
+
+
+def _emit_security_result(format: OutputFormat, result: SecurityScanResult) -> None:
+    payload = result.to_dict()
+    if format is OutputFormat.json:
+        _emit(format, payload, [])
+        return
+    text_lines = [f"Security scan: {result.scan_result} (report-only, never blocks)"]
+    for scope_result in result.scopes:
+        text_lines.append(f"  [{scope_result.status}] scope={scope_result.scope}")
+        for finding in scope_result.findings:
+            text_lines.append(
+                f"    ({finding.severity}) {finding.tool}:{finding.rule_id} "
+                f"{finding.file}:{finding.line} — {finding.description}"
+            )
+    text_lines.append(f"  counts: {result.counts}")
+    text_lines.append(f"  snyk_status: {result.snyk_status}")
+    _emit(format, payload, text_lines)
+
+
+@security_app.command("scan")
+def security_scan(
+    descriptor: Path = typer.Option(
+        Path(".radic/service.yml"), "--descriptor", help="Path to the service descriptor."
+    ),
+    scope: SecurityScope = typer.Option(SecurityScope.all, "--scope", help="Which scope(s) to scan."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Scan a service for secrets and Dockerfile/IaC misconfigurations.
+
+    Report-only: this command always exits OK once the descriptor itself
+    validates, regardless of what it finds (spec FR-006). Image scanning
+    and Snyk are always reported as not-yet-available (FR-007, FR-008).
+    """
+    validation = validate_descriptor(descriptor)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    assert validation.document is not None
+    repo_root = descriptor.resolve().parent.parent
+    result = scan_security(validation.document, scopes=[scope.value], repo_root=repo_root)
+    _emit_security_result(format, result)
+    raise typer.Exit(code=int(ExitCode.OK))
 
 
 # --- policy ------------------------------------------------------------
