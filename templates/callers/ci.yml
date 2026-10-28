@@ -5,7 +5,10 @@
 #
 # Principle I (centralise implementation, decentralise configuration): this
 # is the entire CI definition a service repo needs. All real logic lives in
-# delivery-platform's reusable `ci` workflow, pinned to an exact tag.
+# delivery-platform's reusable `ci` and `security` workflows, pinned to an
+# exact tag. There is no dedicated security caller file (Reference 2's
+# 8-caller-file count per service repo has none) — security is this
+# second job, not a ninth file (specs/003-security-scanning).
 
 name: ci
 
@@ -19,3 +22,8 @@ jobs:
     with:
       mode: ci-gate
       descriptor: .radic/service.yml
+
+  security:
+    uses: radicdotai/delivery-platform/.github/workflows/security.yml@v1.0.0
+    with:
+      scope: all

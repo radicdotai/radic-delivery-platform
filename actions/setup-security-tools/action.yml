@@ -1,0 +1,48 @@
+name: Setup security scanning tools
+description: >-
+  Installs gitleaks, hadolint, and trivy on the runner at pinned versions,
+  for the report-only security scan (specs/003-security-scanning). Does
+  NOT install Snyk or any image-scanning tool — both are explicitly
+  deferred by this platform (see engine/README.md).
+
+inputs:
+  gitleaks-version:
+    description: Exact gitleaks release version to install.
+    required: false
+    default: "8.30.1"
+  hadolint-version:
+    description: Exact hadolint release version to install.
+    required: false
+    default: "2.15.1"
+  trivy-version:
+    description: Exact trivy release version to install.
+    required: false
+    default: "0.76.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Install gitleaks
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.gitleaks-version }}/gitleaks_${{ inputs.gitleaks-version }}_linux_x64.tar.gz" \
+          | tar -xz -C /usr/local/bin gitleaks
+        gitleaks version
+
+    - name: Install hadolint
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -sSL -o /usr/local/bin/hadolint \
+          "https://github.com/hadolint/hadolint/releases/download/v${{ inputs.hadolint-version }}/hadolint-Linux-x86_64"
+        chmod +x /usr/local/bin/hadolint
+        hadolint --version
+
+    - name: Install trivy
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -sSL "https://github.com/aquasecurity/trivy/releases/download/v${{ inputs.trivy-version }}/trivy_${{ inputs.trivy-version }}_Linux-64bit.tar.gz" \
+          | tar -xz -C /usr/local/bin trivy
+        trivy --version
