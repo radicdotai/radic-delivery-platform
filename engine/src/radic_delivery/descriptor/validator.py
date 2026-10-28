@@ -37,6 +37,10 @@ def _load_yaml(descriptor_path: Path) -> tuple[dict[str, Any] | None, Validation
             raw = yaml.safe_load(f)
     except yaml.YAMLError as exc:
         return None, ValidationIssue(path="(file)", message=f"Not valid YAML: {exc}", category="parse_error")
+    except OSError as exc:
+        return None, ValidationIssue(
+            path="(file)", message=f"Could not read descriptor file: {exc}", category="parse_error"
+        )
     if not isinstance(raw, dict):
         return None, ValidationIssue(
             path="(file)",

@@ -1,0 +1,21 @@
+# Example thin caller — copy into a service repo as .github/workflows/ci.yml
+# and adjust nothing except the pinned tag when upgrading. This file is not
+# executed in delivery-platform itself; there is no real service repo here
+# to call it against (specs/002-ci-gate-workflow/spec.md Assumptions).
+#
+# Principle I (centralise implementation, decentralise configuration): this
+# is the entire CI definition a service repo needs. All real logic lives in
+# delivery-platform's reusable `ci` workflow, pinned to an exact tag.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [dev]
+
+jobs:
+  ci-gate:
+    uses: radicdotai/delivery-platform/.github/workflows/ci.yml@v1.0.0
+    with:
+      mode: ci-gate
+      descriptor: .radic/service.yml

@@ -31,6 +31,7 @@ dev = [
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+extend-exclude = ["tests/fixtures/sample-repos"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -45,4 +46,4 @@ packages = ["radic_delivery"]
 mypy_path = "src"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit"]

@@ -1,0 +1,40 @@
+name: Setup engine
+description: >-
+  Checkout this platform's own code (delivery-platform) at the exact ref
+  under which this action is running, and install its engine CLI with uv.
+  See specs/002-ci-gate-workflow/research.md (decision D3) for why this
+  explicit checkout is needed even though this action is referenced by a
+  local path from a reusable workflow defined in the same repository.
+
+inputs:
+  path:
+    description: Where to check out delivery-platform on the runner.
+    required: false
+    default: .platform-engine
+
+outputs:
+  engine-project:
+    description: Path to the engine's uv project, for `uv run --project`.
+    value: ${{ steps.locate.outputs.engine-project }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout delivery-platform at the pinned ref
+      uses: actions/checkout@v4
+      with:
+        repository: radicdotai/delivery-platform
+        ref: ${{ github.action_ref }}
+        path: ${{ inputs.path }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+
+    - name: Sync engine dependencies
+      shell: bash
+      run: uv sync --project "${{ inputs.path }}/engine"
+
+    - name: Locate engine project
+      id: locate
+      shell: bash
+      run: echo "engine-project=${{ inputs.path }}/engine" >> "$GITHUB_OUTPUT"

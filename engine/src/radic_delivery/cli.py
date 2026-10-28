@@ -22,6 +22,8 @@ from radic_delivery.descriptor.schema_loader import load_service_schema
 from radic_delivery.descriptor.validator import ValidationResult
 from radic_delivery.descriptor.validator import validate as validate_descriptor
 from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
+from radic_delivery.gate.evaluator import evaluate as evaluate_gate
+from radic_delivery.gate.result import GateResult
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
 
@@ -103,6 +105,72 @@ def descriptor_show(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
+# --- gate --------------------------------------------------------------
+
+gate_app = typer.Typer(help="Evaluate a service's quality gate.")
+app.add_typer(gate_app, name="gate")
+
+
+class GateMode(StrEnum):
+    ci_gate = "ci-gate"
+    release_gate = "release-gate"
+
+
+def _emit_gate_result(format: OutputFormat, result: GateResult) -> None:
+    payload = result.to_dict()
+    if format is OutputFormat.json:
+        _emit(format, payload, [])
+        return
+    text_lines = [f"Gate ({result.mode}): {result.overall.upper()}"]
+    for check in result.checks:
+        text_lines.append(f"  [{check.status}] {check.name}: {check.detail}")
+    if result.coverage is not None:
+        text_lines.append(f"  coverage: {result.coverage.to_dict()}")
+    if result.skipped_count is not None:
+        text_lines.append(f"  skipped_count: {result.skipped_count}")
+    text_lines.append(f"  mutation: {result.mutation}")
+    text_lines.append(f"  deploy_lint: {result.deploy_lint}")
+    text_lines.append(f"  test_inventory_uri: {result.test_inventory_uri}")
+    _emit(format, payload, text_lines)
+
+
+@gate_app.command("evaluate")
+def gate_evaluate(
+    descriptor: Path = typer.Option(
+        Path(".radic/service.yml"), "--descriptor", help="Path to the service descriptor."
+    ),
+    mode: GateMode = typer.Option(GateMode.ci_gate, "--mode", help="Which gate mode to evaluate."),
+    run_mutation: bool = typer.Option(
+        False, "--run-mutation", help="Request mutation testing (not implemented yet; never fails the gate)."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Evaluate the quality gate for a service (FR-002 through FR-013)."""
+    validation = validate_descriptor(descriptor)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    assert validation.document is not None
+    repo_root = descriptor.resolve().parent.parent
+    result = evaluate_gate(
+        validation.document,
+        mode=mode.value,
+        run_mutation=run_mutation,
+        repo_root=repo_root,
+    )
+    _emit_gate_result(format, result)
+
+    if result.overall == "pass":
+        raise typer.Exit(code=int(ExitCode.OK))
+    if result.overall == "not_implemented":
+        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
+    # A gate failure (lint/typecheck/unit/coverage/skip-budget not met) is a
+    # policy rejection, distinct from the descriptor itself being malformed
+    # (that case already exited INVALID_INPUT above, before any check ran).
+    raise typer.Exit(code=int(ExitCode.POLICY_FAILURE))
+
+
 # --- policy ------------------------------------------------------------
 
 policy_app = typer.Typer(help="Inspect the policy/exceptions.yml ledger.")
@@ -137,7 +205,7 @@ def exceptions_check(
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["gate", "notes", "tests", "release", "deploy", "records", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "release", "deploy", "records", "rollback", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:
