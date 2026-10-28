@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/radicdotai/delivery-platform/schemas/release-manifest.schema.json",
+  "title": "Release Manifest",
+  "description": "Shape of releases/<id>.yaml in radicdotai/delivery-records. Stable contract for a later feature; not read or written by the engine scaffold.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "release_id", "kind", "status", "repo", "created_at",
+    "initiator", "base", "selection", "approvals", "digests", "gates"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release_id": { "type": "string", "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9]+(-hf)?$" },
+    "kind": { "type": "string", "enum": ["release", "hotfix"] },
+    "status": {
+      "type": "string",
+      "enum": [
+        "proposed", "approved", "cut", "stage-deployed", "stage-verified",
+        "prod-deployed", "finalised", "aborted", "failed"
+      ]
+    },
+    "repo": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "initiator": { "type": "string" },
+    "base": { "type": "string" },
+    "selection": { "type": "object" },
+    "approvals": { "type": "object" },
+    "digests": { "type": "object" },
+    "cloud_deploy": { "type": "object" },
+    "gates": { "type": "object" },
+    "main": { "type": "object" },
+    "platform_tag": { "type": "string" }
+  }
+}

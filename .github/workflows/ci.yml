@@ -1,0 +1,113 @@
+name: ci
+
+# The platform's central CI reusable workflow (Reference 2: Workflow
+# Contracts and Caller Templates). A service repo never copies this logic —
+# it calls this workflow, pinned to an exact tag, via a thin caller like
+# templates/callers/ci.yml (constitution Principle I).
+#
+# `mode: ci-gate` is fully implemented (specs/002-ci-gate-workflow).
+# `mode: release-gate` is accepted but not yet implemented — `gate evaluate`
+# itself reports that distinctly (see engine/README.md), and this workflow
+# surfaces it as a failed job rather than a silent pass.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "Which gate mode to evaluate: ci-gate (implemented) or release-gate (not yet)."
+        type: string
+        default: ci-gate
+      run_mutation:
+        description: "Request mutation testing (not implemented yet; never fails the gate)."
+        type: boolean
+        default: false
+      descriptor:
+        description: "Path to the calling repo's service descriptor."
+        type: string
+        default: .radic/service.yml
+    outputs:
+      gate_result:
+        description: "pass | fail | not_implemented"
+        value: ${{ jobs.gate.outputs.gate_result }}
+      coverage_total:
+        description: "Measured coverage figure(s) as reported by gate evaluate, or null."
+        value: ${{ jobs.gate.outputs.coverage_total }}
+      skipped_count:
+        description: "Number of skipped tests observed, or null."
+        value: ${{ jobs.gate.outputs.skipped_count }}
+      test_inventory_uri:
+        description: "Not implemented yet by this platform (always 'not_available')."
+        value: ${{ jobs.gate.outputs.test_inventory_uri }}
+      deploy_lint:
+        description: "Not implemented yet by this platform (always 'not_available')."
+        value: ${{ jobs.gate.outputs.deploy_lint }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      gate_result: ${{ steps.gate.outputs.gate_result }}
+      coverage_total: ${{ steps.gate.outputs.coverage_total }}
+      skipped_count: ${{ steps.gate.outputs.skipped_count }}
+      test_inventory_uri: ${{ steps.gate.outputs.test_inventory_uri }}
+      deploy_lint: ${{ steps.gate.outputs.deploy_lint }}
+    steps:
+      - name: Checkout calling service repo
+        uses: actions/checkout@v4
+
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Read descriptor's runtime template
+        id: descriptor
+        run: |
+          template=$(uv run --project "${{ steps.engine.outputs.engine-project }}" \
+            radic-delivery descriptor show "${{ inputs.descriptor }}" --format json \
+            | jq -r '.resolved.runtime.template')
+          echo "template=$template" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Python toolchain (uv sync)
+        if: steps.descriptor.outputs.template == 'python-uv'
+        run: uv sync
+
+      - name: Setup Node toolchain (npm ci)
+        if: steps.descriptor.outputs.template == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        if: steps.descriptor.outputs.template == 'node'
+        run: npm ci
+
+      - name: Evaluate the gate
+        id: gate
+        run: |
+          set +e
+          extra_args=()
+          if [ "${{ inputs.run_mutation }}" = "true" ]; then
+            extra_args+=(--run-mutation)
+          fi
+
+          uv run --project "${{ steps.engine.outputs.engine-project }}" \
+            radic-delivery gate evaluate \
+            --mode "${{ inputs.mode }}" \
+            --descriptor "${{ inputs.descriptor }}" \
+            "${extra_args[@]}" \
+            --format json > gate-result.json
+          cat gate-result.json
+
+          {
+            jq -r '"gate_result=" + .overall' gate-result.json
+            jq -c '.coverage // "null"' gate-result.json | sed 's/^/coverage_total=/'
+            jq -r '.skipped_count // "null"' gate-result.json | sed 's/^/skipped_count=/'
+            jq -r '.test_inventory_uri.status' gate-result.json | sed 's/^/test_inventory_uri=/'
+            jq -r '.deploy_lint.status' gate-result.json | sed 's/^/deploy_lint=/'
+          } >> "$GITHUB_OUTPUT"
+
+          overall=$(jq -r '.overall' gate-result.json)
+          if [ "$overall" != "pass" ]; then
+            echo "Gate result: $overall (see above for per-check detail)"
+            exit 1
+          fi

@@ -1,0 +1,47 @@
+name: engine-ci
+
+# This repository's OWN CI — distinct from the 12 reusable workflows this
+# platform will ship for service repos to call. It gates changes to the
+# engine, the schemas it validates against, and the policy ledger it reads.
+
+on:
+  pull_request:
+    paths:
+      - "engine/**"
+      - "schemas/**"
+      - "policy/**"
+      - ".github/workflows/engine-ci.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "engine/**"
+      - "schemas/**"
+      - "policy/**"
+      - ".github/workflows/engine-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy src/
+
+      - name: Workflow lint
+        uses: raven-actions/actionlint@v2

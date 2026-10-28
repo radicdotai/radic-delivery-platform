@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/radicdotai/delivery-platform/schemas/exceptions.schema.json",
+  "title": "Policy Exceptions Ledger",
+  "description": "The single file (policy/exceptions.yml) recording every approved, time-boxed exception to a fail-closed gate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exceptions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "scope", "owner", "approver", "reason", "jira_key", "created", "expires"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^EXC-[0-9]{4}$" },
+          "scope": { "type": "string", "minLength": 1 },
+          "owner": { "type": "string", "minLength": 1 },
+          "approver": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "jira_key": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$|^TODO-VERIFY$" },
+          "created": { "type": "string", "format": "date" },
+          "expires": { "type": "string", "format": "date" }
+        }
+      }
+    }
+  }
+}

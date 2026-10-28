@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/radicdotai/delivery-platform/schemas/change-note.schema.json",
+  "title": "Change Note",
+  "description": "Shape of gs://radicai-release-records/change-notes/<repo>/<sha>.json. Stable contract for a later feature; not read or written by the engine scaffold.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["repo", "sha", "type", "audience", "title", "summary", "jira_key"],
+  "properties": {
+    "repo": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+$" },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "type": {
+      "type": "string",
+      "enum": ["feature", "fix", "improvement", "chore", "security", "docs", "internal"]
+    },
+    "audience": { "type": "string", "enum": ["customer", "internal", "none"] },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "jira_key": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$" },
+    "linked_prs": { "type": "array", "items": { "type": "integer" } },
+    "migration": { "type": "object" },
+    "uat_escape": { "type": "boolean" },
+    "regression_test_added": { "type": "boolean" },
+    "dev_deploy": { "type": "object" }
+  }
+}
