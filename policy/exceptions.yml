@@ -1,0 +1,38 @@
+# The single ledger of approved, time-boxed exceptions to a fail-closed gate.
+# Validated against schemas/exceptions.schema.json.
+#
+# NOTE on expiry: the general exceptions policy (Confluence: "Quality,
+# Security and Governance") states a maximum lifetime of 30 days (14 for
+# Critical severity). The Implementation Pack's specific seed instruction for
+# these three bootstrap exceptions states a 60-day expiry. This file follows
+# the task-specific instruction (60 days) since these are structural
+# "no post_deploy suite defined yet" bootstrap gaps, not severity findings —
+# see specs/001-engine-scaffold/research.md. Flagged for Tech Lead
+# confirmation; do not copy this 60-day precedent for future exceptions
+# without resolving the discrepancy first.
+schema_version: 1
+exceptions:
+  - id: EXC-0001
+    scope: quality.post_deploy
+    owner: web-bff
+    approver: Tech Lead
+    reason: No post_deploy suite defined yet for web-bff; platform bootstrap gap.
+    jira_key: TODO-VERIFY
+    created: "2026-10-29"
+    expires: "2026-12-28"
+  - id: EXC-0002
+    scope: quality.post_deploy
+    owner: image-studio
+    approver: Tech Lead
+    reason: No post_deploy suite defined yet for image-studio; platform bootstrap gap.
+    jira_key: TODO-VERIFY
+    created: "2026-10-29"
+    expires: "2026-12-28"
+  - id: EXC-0003
+    scope: quality.post_deploy
+    owner: brand_research
+    approver: Tech Lead
+    reason: No post_deploy suite defined yet for brand_research; platform bootstrap gap.
+    jira_key: TODO-VERIFY
+    created: "2026-10-29"
+    expires: "2026-12-28"

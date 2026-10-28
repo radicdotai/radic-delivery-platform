@@ -1,0 +1,112 @@
+schema_version: 1
+service:
+  name: frontend-v2
+  kind: web
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/frontend-v2
+  trunk: dev
+runtime:
+  template: node
+  version: "20"
+  framework: "Next.js (standalone)"
+  package_manager: npm
+  services: [firebase-auth-emulator]
+build:
+  dockerfile: Dockerfile
+  env_agnostic: true
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-frontend-v2
+    name: frontend-v2
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: frontend-v2-dev
+    health:
+      url: https://frontend-v2-dev.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: frontend-v2/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: frontend-v2-stage
+    health:
+      url: https://frontend-v2-stage.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-main
+      prefix: frontend-v2/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: frontend-v2
+    health:
+      url: https://frontend-v2.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-main
+      prefix: frontend-v2/prod
+migrations:
+  enabled: false
+terraform:
+  dir_pattern: "terraform/envs/${env}"
+  apply_mode: full
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: frontend-v2
+      kind: service
+      pipelines:
+        dev: frontend-v2-dev
+        rel: frontend-v2-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /
+      require_approval:
+        prod: true
+quality:
+  lint:
+    tool: eslint
+  typecheck:
+    tool: tsc
+    blocking: true
+  unit:
+    runner: vitest
+    script: "test:coverage"
+  coverage_floor:
+    statements: 70
+    branches: 70
+    functions: 70
+    lines: 70
+  skip_budget: 0
+  post_deploy:
+    suites:
+      - name: e2e-regression-dev
+        runner: playwright
+        target: e2e-regression-dev
+        environments: [dev]
+        tags_excluded: ["@seeded", "@writes"]
+      - name: e2e-full-stage
+        runner: playwright
+        target: e2e-full-stage
+        environments: [stage]
+        tags_included: ["@seeded", "@writes", "@smoke"]
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

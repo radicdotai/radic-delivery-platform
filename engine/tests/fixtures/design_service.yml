@@ -1,0 +1,110 @@
+schema_version: 1
+service:
+  name: design_service
+  kind: api
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/design_service
+  trunk: dev
+runtime:
+  template: python-uv
+  version: "3.11"
+  package_manager: uv
+build:
+  dockerfile: Dockerfile
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-design
+    name: design-service
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: radic-dev-design-service
+    health:
+      url: https://radic-dev-design-service.example.run.app/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: design_service/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: radic-stage-design-service
+    health:
+      url: https://radic-stage-design-service.example.run.app/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: design_service/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: radic-prod-design-service
+    health:
+      url: https://radic-prod-design-service.example.run.app/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: design_service/prod
+migrations:
+  enabled: true
+  tool: alembic
+  service_accounts:
+    dev: TODO-VERIFY
+    stage: TODO-VERIFY
+    prod: TODO-VERIFY
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: design-service
+      kind: service
+      pipelines:
+        dev: design-service-dev
+        rel: design-service-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /health
+        mode: gcloud-ready
+      require_approval:
+        prod: true
+quality:
+  lint:
+    tool: ruff
+  typecheck:
+    tool: mypy
+    blocking: true
+  unit:
+    runner: pytest
+  coverage_floor:
+    global: 90
+  skip_budget: 0
+  post_deploy:
+    suites:
+      - name: deployed-endpoints
+        runner: pytest
+        target: "tests/e2e/test_deployed_endpoints.py"
+        environments: [dev, stage]
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD
+secrets_inventory:
+  secret_manager_counts:
+    dev: TODO-VERIFY
+    stage: TODO-VERIFY
+    prod: TODO-VERIFY

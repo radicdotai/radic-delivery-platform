@@ -1,0 +1,116 @@
+schema_version: 1
+service:
+  name: image-studio
+  kind: worker
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/image-studio
+  trunk: dev
+runtime:
+  template: python-uv
+  version: "3.12"
+  package_manager: uv
+  system_packages: [ffmpeg, libcairo2]
+  services: [redis]
+build:
+  dockerfile: Dockerfile
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-image-studio
+    name: image-studio
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: image-studio-dev
+    health:
+      url: https://image-studio-dev.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: image-studio/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: image-studio-stage
+    health:
+      url: https://image-studio-stage.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: image-studio/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: image-studio
+    health:
+      url: https://image-studio.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: image-studio/prod
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: image-studio
+      kind: service
+      pipelines:
+        dev: image-studio-dev
+        rel: image-studio-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /health
+      require_approval:
+        prod: true
+    - name: runner
+      kind: service
+      pipelines:
+        dev: image-studio-runner-dev
+        rel: image-studio-runner-rel
+      service_yaml:
+        dev: deploy/run/runner/dev.yaml
+        stage: deploy/run/runner/stage.yaml
+        prod: deploy/run/runner/prod.yaml
+      require_approval:
+        prod: true
+    - name: carousel-worker
+      kind: workerpool
+      pipelines:
+        dev: image-studio-carousel-worker-dev
+        rel: image-studio-carousel-worker-rel
+      require_approval:
+        prod: true
+    - name: video-worker
+      kind: workerpool
+      only_in: [dev]
+      pipelines:
+        dev: image-studio-video-worker-dev
+quality:
+  lint:
+    tool: ruff
+  typecheck:
+    tool: mypy
+    blocking: true
+  unit:
+    runner: pytest
+  coverage_floor:
+    global: 80
+  skip_budget: 0
+  post_deploy:
+    exception_id: EXC-0002
+    suites: []
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

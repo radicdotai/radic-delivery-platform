@@ -1,0 +1,108 @@
+schema_version: 1
+service:
+  name: brand_research
+  kind: api
+  owner: platform-maintainers
+  channel: canary
+repo:
+  slug: radicdotai/brand_research
+  trunk: dev
+runtime:
+  template: python-uv
+  version: "3.12"
+  package_manager: uv
+build:
+  dockerfile: Dockerfile
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-brand-research
+    name: brand-research
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: brand-research-dev
+    health:
+      url: https://brand-research-dev.example.run.app/api/v1/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: brand_research/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: brand-research-stage
+    health:
+      url: https://brand-research-stage.example.run.app/api/v1/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: brand_research/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: brand-research
+    health:
+      url: https://brand-research.example.run.app/api/v1/health
+      mode: gcloud-ready
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: brand_research/prod
+migrations:
+  enabled: true
+  tool: alembic
+  service_accounts:
+    dev: TODO-VERIFY
+    stage: TODO-VERIFY
+    prod: TODO-VERIFY
+  checks: [alembic_check, migration_graph]
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: brand-research
+      kind: service
+      pipelines:
+        dev: brand-research-dev
+        rel: brand-research-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /api/v1/health
+        mode: gcloud-ready
+      require_approval:
+        prod: true
+quality:
+  lint:
+    tool: ruff
+  typecheck:
+    tool: mypy
+    blocking: true
+  unit:
+    runner: pytest
+  coverage_floor:
+    global: 90
+  skip_budget: 0
+  post_deploy:
+    exception_id: EXC-0003
+    suites:
+      - name: integration-deployed
+        runner: pytest
+        target: integration
+        environments: [dev]
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

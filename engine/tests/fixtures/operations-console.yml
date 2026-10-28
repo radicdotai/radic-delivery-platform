@@ -1,0 +1,107 @@
+schema_version: 1
+service:
+  name: operations-console
+  kind: console
+  owner: platform-maintainers
+  channel: canary
+repo:
+  slug: radicdotai/operations-console
+  trunk: dev
+runtime:
+  template: node
+  version: "20"
+  framework: "Next.js 16.2"
+  package_manager: npm
+build:
+  dockerfile: Dockerfile
+  env_agnostic: true
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-operations-console
+    name: operations-console
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: operations-console-dev
+    deployer_service_account: github-actions-deployer@radicai.iam.gserviceaccount.com
+    health:
+      url: https://operations-console-dev.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: operations-console/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: operations-console-stage
+    deployer_service_account: github-actions-deployer@radicai.iam.gserviceaccount.com
+    health:
+      url: https://operations-console-stage.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: operations-console/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: operations-console
+    deployer_service_account: github-actions-deployer@radicai.iam.gserviceaccount.com
+    health:
+      url: https://operations-console.example.run.app/
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: operations-console/prod
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: operations-console
+      kind: service
+      pipelines:
+        dev: operations-console-dev
+        rel: operations-console-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /
+      require_approval:
+        prod: true
+      parity:
+        allow: [service_name]
+quality:
+  lint:
+    tool: eslint
+  typecheck:
+    tool: tsc
+    blocking: true
+  unit:
+    runner: vitest
+  coverage_floor:
+    statements: 55
+    branches: 80
+    functions: 70
+    lines: 55
+    per_file_check: vitest-thresholds
+  skip_budget: 0
+  post_deploy:
+    suites:
+      - name: e2e-regression
+        runner: playwright
+        target: e2e/regression
+        environments: [dev, stage]
+        needs_auth_emulator: false
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

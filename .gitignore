@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code runtime/session state (not the committed .claude/skills/)
+.claude/scheduled_tasks.lock
