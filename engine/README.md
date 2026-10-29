@@ -3,10 +3,12 @@
 The `radic-delivery` CLI: the single supported code path for inspecting and
 validating this platform's service descriptors and policy exceptions, for
 evaluating a service's CI quality gate, for scanning a service for security
-findings, and for linting a service's Cloud Deploy manifests. See
+findings, for linting a service's Cloud Deploy manifests, and for parsing
+and authorizing release-PR slash commands. See
 `specs/001-engine-scaffold/`, `specs/002-ci-gate-workflow/`,
-`specs/003-security-scanning/`, and `specs/004-deploy-yaml-lint/` for the
-full specification, plan, and design rationale behind this package.
+`specs/003-security-scanning/`, `specs/004-deploy-yaml-lint/`, and
+`specs/005-release-command-parser/` for the full specification, plan, and
+design rationale behind this package.
 
 ## Command surface
 
@@ -18,10 +20,11 @@ radic-delivery gate evaluate --mode ci-gate <...>         # implemented
 radic-delivery gate evaluate --mode release-gate <...>    # not implemented yet (reports as such)
 radic-delivery security scan --scope source|iac|all <...> # implemented (report-only — never blocks)
 radic-delivery deploy lint <...>                          # implemented (binary — fails on a bad manifest)
+radic-delivery release command <...>                      # implemented (parses + authorizes a PR comment)
 
 radic-delivery notes ...        # not implemented yet
 radic-delivery tests ...        # not implemented yet
-radic-delivery release ...      # not implemented yet (top-level release-train group)
+radic-delivery release propose|cut|verify-promotion|finalise   # not implemented yet
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
 radic-delivery records ...      # not implemented yet
 radic-delivery rollback ...     # not implemented yet
@@ -63,6 +66,23 @@ so there is no report-only phase for them. Only `deploy lint` is
 implemented; every other `deploy` subcommand calls real Cloud Deploy and
 remains unimplemented. See `specs/004-deploy-yaml-lint/data-model.md` for
 the full `DeployLintResult` shape.
+
+`release command` classifies a PR comment's **first line only** into exactly
+one of four outcomes: `not_a_command` (the overwhelming majority of PR
+comments — not an error), `malformed` (looks like one of the six fixed
+forms but fails to match it, e.g. a missing `reason:`), `unauthorized` (a
+syntactically valid command from an author who isn't on the
+`--release-managers` list, or isn't the `--tech-lead` for the
+Tech-Lead-only `release waive dev-green` form), or `accepted` (with the
+matched form name and its extracted arguments). Team membership and the
+Tech Lead identity are explicit inputs — this command never looks them up
+itself, same as `gate evaluate` doesn't install a service's own toolchain.
+The comment body is read only from `--comment-file` or stdin, never from a
+CLI text argument, so a calling workflow is never tempted to interpolate an
+untrusted PR comment body into a shell command. Every other `release`
+subcommand (`propose`, `cut`, `verify-promotion`, `finalise`) remains
+unimplemented. See `specs/005-release-command-parser/data-model.md` for the
+full `CommandCheckResult` shape.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

@@ -10,6 +10,7 @@ unhandled error or a silent no-op.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -28,6 +29,9 @@ from radic_delivery.gate.evaluator import evaluate as evaluate_gate
 from radic_delivery.gate.result import GateResult
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
+from radic_delivery.release_commands.authorization import authorize as authorize_command
+from radic_delivery.release_commands.grammar import parse as parse_command
+from radic_delivery.release_commands.result import CommandCheckResult
 from radic_delivery.security.aggregator import scan as scan_security
 from radic_delivery.security.result import SecurityScanResult
 
@@ -298,6 +302,82 @@ for _subcommand_name in _DEPLOY_NOT_IMPLEMENTED:
     )(_make_deploy_stub(_subcommand_name))
 
 
+# --- release -------------------------------------------------------------
+
+release_app = typer.Typer(help="Parse and authorize release-PR slash commands.")
+app.add_typer(release_app, name="release")
+
+
+def _emit_command_check_result(format: OutputFormat, result: CommandCheckResult) -> None:
+    payload = result.to_dict()
+    if format is OutputFormat.json:
+        _emit(format, payload, [])
+        return
+    text_lines = [f"Release command: {result.classification}"]
+    if result.form is not None:
+        text_lines.append(f"  form: {result.form}")
+    if result.args:
+        text_lines.append(f"  args: {result.args}")
+    if result.detail:
+        text_lines.append(f"  detail: {result.detail}")
+    _emit(format, payload, text_lines)
+
+
+@release_app.command("command")
+def release_command(
+    comment_file: Path | None = typer.Option(
+        None, "--comment-file", help="Path to a file containing the raw PR comment text. Omit to read stdin."
+    ),
+    author: str = typer.Option(..., "--author", help="GitHub username of the comment's author."),
+    release_managers: str = typer.Option(
+        ..., "--release-managers", help="Comma-separated GitHub usernames on the release-managers team."
+    ),
+    tech_lead: str = typer.Option(..., "--tech-lead", help="GitHub username of the current Tech Lead."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Classify a PR comment as not-a-command, malformed, unauthorized, or accepted.
+
+    The comment text is read from a file or stdin only — never from a CLI
+    text argument — so a workflow never has to interpolate an untrusted
+    comment body into a shell command (research.md D4).
+    """
+    comment_body = comment_file.read_text() if comment_file is not None else sys.stdin.read()
+    release_manager_list = [name.strip() for name in release_managers.split(",") if name.strip()]
+
+    parsed = parse_command(comment_body)
+    result = authorize_command(parsed, author, release_manager_list, tech_lead)
+    _emit_command_check_result(format, result)
+
+    if result.classification in ("not_a_command", "accepted"):
+        raise typer.Exit(code=int(ExitCode.OK))
+    if result.classification == "malformed":
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+    raise typer.Exit(code=int(ExitCode.POLICY_FAILURE))  # unauthorized
+
+
+_RELEASE_NOT_IMPLEMENTED = ["propose", "cut", "verify-promotion", "finalise"]
+
+
+def _make_release_stub(subcommand_name: str) -> Any:
+    def _stub(ctx: typer.Context) -> None:
+        typer.echo(
+            f"'release {subcommand_name}' is a planned subcommand (see the approved architecture) "
+            "that is not implemented yet by this feature.",
+            err=True,
+        )
+        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
+
+    return _stub
+
+
+for _subcommand_name in _RELEASE_NOT_IMPLEMENTED:
+    release_app.command(
+        name=_subcommand_name,
+        help=f"(not implemented yet) release {_subcommand_name}.",
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    )(_make_release_stub(_subcommand_name))
+
+
 # --- policy ------------------------------------------------------------
 
 policy_app = typer.Typer(help="Inspect the policy/exceptions.yml ledger.")
@@ -332,7 +412,7 @@ def exceptions_check(
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "release", "records", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "records", "rollback", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:
