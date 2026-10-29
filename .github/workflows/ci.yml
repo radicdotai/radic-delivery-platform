@@ -9,6 +9,10 @@ name: ci
 # `mode: release-gate` is accepted but not yet implemented — `gate evaluate`
 # itself reports that distinctly (see engine/README.md), and this workflow
 # surfaces it as a failed job rather than a silent pass.
+#
+# `deploy_lint` is also fully implemented (specs/004-deploy-yaml-lint) — a
+# real `radic-delivery deploy lint` result, not the placeholder it used to
+# be, and a failure there fails this job the same way a failing gate does.
 
 on:
   workflow_call:
@@ -39,7 +43,7 @@ on:
         description: "Not implemented yet by this platform (always 'not_available')."
         value: ${{ jobs.gate.outputs.test_inventory_uri }}
       deploy_lint:
-        description: "Not implemented yet by this platform (always 'not_available')."
+        description: "pass | fail — the real `radic-delivery deploy lint` result (specs/004-deploy-yaml-lint)."
         value: ${{ jobs.gate.outputs.deploy_lint }}
 
 jobs:
@@ -50,7 +54,7 @@ jobs:
       coverage_total: ${{ steps.gate.outputs.coverage_total }}
       skipped_count: ${{ steps.gate.outputs.skipped_count }}
       test_inventory_uri: ${{ steps.gate.outputs.test_inventory_uri }}
-      deploy_lint: ${{ steps.gate.outputs.deploy_lint }}
+      deploy_lint: ${{ steps.deploy_lint.outputs.deploy_lint }}
     steps:
       - name: Checkout calling service repo
         uses: actions/checkout@v4
@@ -103,11 +107,31 @@ jobs:
             jq -c '.coverage // "null"' gate-result.json | sed 's/^/coverage_total=/'
             jq -r '.skipped_count // "null"' gate-result.json | sed 's/^/skipped_count=/'
             jq -r '.test_inventory_uri.status' gate-result.json | sed 's/^/test_inventory_uri=/'
-            jq -r '.deploy_lint.status' gate-result.json | sed 's/^/deploy_lint=/'
           } >> "$GITHUB_OUTPUT"
 
           overall=$(jq -r '.overall' gate-result.json)
           if [ "$overall" != "pass" ]; then
             echo "Gate result: $overall (see above for per-check detail)"
+            exit 1
+          fi
+
+      - name: Lint deploy manifests
+        id: deploy_lint
+        # specs/004-deploy-yaml-lint: a bad manifest is invalid input to a
+        # deploy that must not happen, not an advisory finding — a failure
+        # here fails this job, same as a failing gate above.
+        run: |
+          set +e
+          uv run --project "${{ steps.engine.outputs.engine-project }}" \
+            radic-delivery deploy lint \
+            --descriptor "${{ inputs.descriptor }}" \
+            --format json > deploy-lint-result.json
+          cat deploy-lint-result.json
+
+          jq -r '"deploy_lint=" + .overall' deploy-lint-result.json >> "$GITHUB_OUTPUT"
+
+          overall=$(jq -r '.overall' deploy-lint-result.json)
+          if [ "$overall" != "pass" ]; then
+            echo "Deploy lint result: $overall (see above for per-check detail)"
             exit 1
           fi

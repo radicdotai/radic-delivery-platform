@@ -171,7 +171,11 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "allow": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+                  "allow": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["service_name", "secret_count"] },
+                    "uniqueItems": true
+                  }
                 }
               },
               "migration": {

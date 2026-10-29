@@ -1,0 +1,23 @@
+apiVersion: skaffold/v4beta9
+kind: Config
+metadata:
+  name: sample
+profiles:
+  - name: dev
+    manifests:
+      rawYaml:
+        - run/dev.yaml
+    deploy:
+      cloudrun: {}
+  - name: stage
+    manifests:
+      rawYaml:
+        - run/stage.yaml
+    deploy:
+      cloudrun: {}
+  - name: prod
+    manifests:
+      rawYaml:
+        - run/prod.yaml
+    deploy:
+      cloudrun: {}

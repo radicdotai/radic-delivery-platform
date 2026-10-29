@@ -2,9 +2,10 @@
 
 The `radic-delivery` CLI: the single supported code path for inspecting and
 validating this platform's service descriptors and policy exceptions, for
-evaluating a service's CI quality gate, and for scanning a service for
-security findings. See `specs/001-engine-scaffold/`,
-`specs/002-ci-gate-workflow/`, and `specs/003-security-scanning/` for the
+evaluating a service's CI quality gate, for scanning a service for security
+findings, and for linting a service's Cloud Deploy manifests. See
+`specs/001-engine-scaffold/`, `specs/002-ci-gate-workflow/`,
+`specs/003-security-scanning/`, and `specs/004-deploy-yaml-lint/` for the
 full specification, plan, and design rationale behind this package.
 
 ## Command surface
@@ -16,11 +17,12 @@ radic-delivery policy exceptions check <id>              # implemented
 radic-delivery gate evaluate --mode ci-gate <...>         # implemented
 radic-delivery gate evaluate --mode release-gate <...>    # not implemented yet (reports as such)
 radic-delivery security scan --scope source|iac|all <...> # implemented (report-only — never blocks)
+radic-delivery deploy lint <...>                          # implemented (binary — fails on a bad manifest)
 
 radic-delivery notes ...        # not implemented yet
 radic-delivery tests ...        # not implemented yet
-radic-delivery release ...      # not implemented yet
-radic-delivery deploy ...       # not implemented yet
+radic-delivery release ...      # not implemented yet (top-level release-train group)
+radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
 radic-delivery records ...      # not implemented yet
 radic-delivery rollback ...     # not implemented yet
 radic-delivery migrations ...   # not implemented yet
@@ -46,6 +48,21 @@ exits non-zero is the descriptor itself failing validation, before any scan
 runs. Container-image scanning and Snyk are always reported as
 `not_available`, never silently omitted — see
 `specs/003-security-scanning/data-model.md` for the full result shape.
+
+`deploy lint` reads a descriptor's declared Cloud Run service YAML files for
+dev/stage/prod and checks each against five rules: the required placeholder
+image reference (`image: app`), no `traffic` key, a startup probe present,
+no inline secret (reusing `security scan`'s `gitleaks` integration rather
+than a second detection method), and the three environment files matching
+exactly except for the specific keys the descriptor's own
+`cloud_deploy.deployables[].parity.allow` permits to differ. Unlike
+`security scan`, this is a **binary correctness check, not an advisory
+report**: a bad manifest fails the command (exit `2`), the same as an
+invalid descriptor — Cloud Deploy applies these files exactly as committed,
+so there is no report-only phase for them. Only `deploy lint` is
+implemented; every other `deploy` subcommand calls real Cloud Deploy and
+remains unimplemented. See `specs/004-deploy-yaml-lint/data-model.md` for
+the full `DeployLintResult` shape.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't
