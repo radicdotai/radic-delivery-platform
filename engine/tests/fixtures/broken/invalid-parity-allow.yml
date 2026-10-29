@@ -1,0 +1,106 @@
+schema_version: 1
+service:
+  name: web-bff
+  kind: bff
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/web-bff
+  trunk: dev
+runtime:
+  template: node
+  version: "20"
+  framework: "Next.js 16"
+  package_manager: npm
+build:
+  dockerfile: Dockerfile
+  env_agnostic: false
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-web-bff
+    name: web-bff
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: web-bff-dev
+    health:
+      url: https://web-bff-dev.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: web-bff/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: web-bff-stage
+    health:
+      url: https://web-bff-stage.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-main
+      prefix: web-bff/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: web-bff
+    health:
+      url: https://web-bff.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-main
+      prefix: web-bff/prod
+migrations:
+  enabled: false
+terraform:
+  dir_pattern: "terraform/envs/${env}"
+  apply_mode: full
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: web-bff
+      kind: service
+      pipelines:
+        dev: web-bff-dev
+        rel: web-bff-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /health
+      require_approval:
+        prod: true
+      parity:
+        # Deliberately invalid: not one of the two recognized parity.allow
+        # values (service_name, secret_count), seeded for the schema's
+        # enum-constraint regression test.
+        allow: [servicename]
+quality:
+  lint:
+    tool: eslint
+  typecheck:
+    tool: tsc
+    blocking: true
+  unit:
+    runner: vitest
+  coverage_floor:
+    statements: 60
+    branches: 60
+    functions: 60
+    lines: 60
+  skip_budget: 0
+  post_deploy:
+    exception_id: EXC-0001
+    suites: []
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

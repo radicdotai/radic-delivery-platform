@@ -66,9 +66,23 @@ specs/001 already committed (`secret_count`, `service_name`) without
 guessing at a path-matching heuristic. This explicit, small mapping is
 instead directly checkable against those two real fixtures, and is no
 harder to extend later (add a row) than a generic heuristic would have
-been to get right. Flagged here for platform-maintainer confirmation, same
-treatment as prior features' new conventions (specs/002's skip-exception
-scope, specs/003's severity mapping).
+been to get right.
+
+**Update (same PR, post-review)**: this mapping is now also enforced at
+the schema level, not just documented here. `schemas/service.schema.json`'s
+`cloud_deploy.deployables[].parity.allow` items are constrained to an enum
+of exactly `["service_name", "secret_count"]`, verified non-breaking
+against every fixture in this repo (the only two values used anywhere).
+This closes the "a typo is schema-valid but silently ignored by `deploy
+lint`" gap: an unrecognized value now fails `descriptor validate` directly
+(see `engine/tests/fixtures/broken/invalid-parity-allow.yml` and its
+regression test in `test_descriptor_validate.py`). If a new allowance is
+ever needed, both the schema enum and this table need a matching new row,
+in lockstep. The mapping's *meaning* (what each value permits) is also
+being proposed back to the architecture's own Confluence documentation
+(Reference 1) for Tech Lead confirmation — this repo's schema enum and
+`deploy/parity.py` are the enforced implementation of whatever that
+authoritative source settles on.
 
 ### D4 — Cloud Run Jobs (`job_yaml`) are out of scope for this increment
 

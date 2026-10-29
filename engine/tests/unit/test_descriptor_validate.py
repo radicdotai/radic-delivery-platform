@@ -90,3 +90,21 @@ def test_expired_exception_reference_fails_validation() -> None:
 def test_active_exception_reference_passes_as_of_seed_date() -> None:
     result = validate(FIXTURES / "web-bff.yml", as_of=date(2026, 11, 1))
     assert result.ok
+
+
+def test_unrecognized_parity_allow_value_fails_validation() -> None:
+    """An enum constraint on parity.allow (specs/004-deploy-yaml-lint's
+    follow-up): a typo'd or invented value is caught here rather than being
+    schema-valid but silently ignored by `deploy lint`.
+
+    The two recognized values (service_name, secret_count) are already
+    exercised by real fixtures — operations-console.yml and
+    fastapi-backend.yml respectively — and covered by
+    test_real_service_descriptors_are_valid above, so no separate
+    positive-path test is needed here."""
+    result = validate(BROKEN / "invalid-parity-allow.yml")
+    assert not result.ok
+    assert any(
+        issue.category == "schema_error" and issue.path == "cloud_deploy.deployables.0.parity.allow.0"
+        for issue in result.issues
+    )
