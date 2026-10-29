@@ -17,6 +17,8 @@ from typing import Any
 
 import typer
 
+from radic_delivery.deploy.linter import lint as lint_deploy
+from radic_delivery.deploy.result import DeployLintResult
 from radic_delivery.descriptor.resolver import resolve as resolve_descriptor
 from radic_delivery.descriptor.schema_loader import load_service_schema
 from radic_delivery.descriptor.validator import ValidationResult
@@ -229,6 +231,73 @@ def security_scan(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
+# --- deploy ------------------------------------------------------------
+
+deploy_app = typer.Typer(help="Lint and (eventually) manage a service's Cloud Deploy manifests.")
+app.add_typer(deploy_app, name="deploy")
+
+
+def _emit_deploy_lint_result(format: OutputFormat, result: DeployLintResult) -> None:
+    payload = result.to_dict()
+    if format is OutputFormat.json:
+        _emit(format, payload, [])
+        return
+    text_lines = [f"Deploy lint: {result.overall.upper()}"]
+    for check in result.checks:
+        text_lines.append(
+            f"  [{check.status}] {check.deployable}/{check.rule} ({check.file}): {check.detail}"
+        )
+    _emit(format, payload, text_lines)
+
+
+@deploy_app.command("lint")
+def deploy_lint(
+    descriptor: Path = typer.Option(
+        Path(".radic/service.yml"), "--descriptor", help="Path to the service descriptor."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Lint a service's Cloud Run deploy manifests (FR-002 through FR-011).
+
+    A binary correctness check, not an advisory scan: a bad manifest is
+    invalid input to a deploy that must not happen, so a lint failure and
+    an invalid descriptor both exit INVALID_INPUT.
+    """
+    validation = validate_descriptor(descriptor)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    assert validation.document is not None
+    repo_root = descriptor.resolve().parent.parent
+    result = lint_deploy(validation.document, repo_root=repo_root)
+    _emit_deploy_lint_result(format, result)
+    raise typer.Exit(code=int(ExitCode.OK if result.overall == "pass" else ExitCode.INVALID_INPUT))
+
+
+_DEPLOY_NOT_IMPLEMENTED = ["release", "promote", "approve", "rollback", "status", "drift"]
+
+
+def _make_deploy_stub(subcommand_name: str) -> Any:
+    def _stub(ctx: typer.Context) -> None:
+        typer.echo(
+            f"'deploy {subcommand_name}' is a planned subcommand (see the approved architecture) "
+            "that is not implemented yet by this feature — it would call real Cloud Deploy.",
+            err=True,
+        )
+        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
+
+    return _stub
+
+
+for _subcommand_name in _DEPLOY_NOT_IMPLEMENTED:
+    deploy_app.command(
+        name=_subcommand_name,
+        help=f"(not implemented yet) deploy {_subcommand_name}.",
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    )(_make_deploy_stub(_subcommand_name))
+
+
 # --- policy ------------------------------------------------------------
 
 policy_app = typer.Typer(help="Inspect the policy/exceptions.yml ledger.")
@@ -263,7 +332,7 @@ def exceptions_check(
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "release", "deploy", "records", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "release", "records", "rollback", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:

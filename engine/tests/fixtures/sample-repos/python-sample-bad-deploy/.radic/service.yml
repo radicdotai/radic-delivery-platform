@@ -1,0 +1,96 @@
+schema_version: 1
+service:
+  name: sample
+  kind: api
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/sample
+  trunk: dev
+runtime:
+  template: python-uv
+  version: "3.11"
+  package_manager: uv
+build:
+  dockerfile: Dockerfile
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-sample
+    name: sample
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: sample-dev
+    health:
+      url: https://sample-dev.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: sample/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: sample-stage
+    health:
+      url: https://sample-stage.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: sample/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: sample
+    health:
+      url: https://sample.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: sample/prod
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: sample
+      kind: service
+      pipelines:
+        dev: sample-dev
+        rel: sample-rel
+      service_yaml:
+        dev: deploy/run/dev-with-secret.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /health
+      require_approval:
+        prod: true
+      parity:
+        allow: [service_name]
+quality:
+  lint:
+    tool: ruff
+  typecheck:
+    tool: mypy
+    blocking: true
+  unit:
+    runner: pytest
+  coverage_floor:
+    global: 90
+  skip_budget: 0
+  post_deploy:
+    suites:
+      - name: smoke
+        runner: pytest
+        target: test_sample
+        environments: [dev]
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

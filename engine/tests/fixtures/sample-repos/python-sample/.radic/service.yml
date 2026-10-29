@@ -70,6 +70,8 @@ cloud_deploy:
         path: /health
       require_approval:
         prod: true
+      parity:
+        allow: [service_name]
 quality:
   lint:
     tool: ruff
