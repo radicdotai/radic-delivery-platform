@@ -6,9 +6,10 @@ evaluating a service's CI quality gate, for scanning a service for security
 findings, for linting a service's Cloud Deploy manifests, and for parsing
 and authorizing release-PR slash commands. See
 `specs/001-engine-scaffold/`, `specs/002-ci-gate-workflow/`,
-`specs/003-security-scanning/`, `specs/004-deploy-yaml-lint/`, and
-`specs/005-release-command-parser/` for the full specification, plan, and
-design rationale behind this package.
+`specs/003-security-scanning/`, `specs/004-deploy-yaml-lint/`,
+`specs/005-release-command-parser/`, and
+`specs/006-release-commands-workflow/` for the full specification, plan,
+and design rationale behind this package.
 
 ## Command surface
 
@@ -83,6 +84,19 @@ untrusted PR comment body into a shell command. Every other `release`
 subcommand (`propose`, `cut`, `verify-promotion`, `finalise`) remains
 unimplemented. See `specs/005-release-command-parser/data-model.md` for the
 full `CommandCheckResult` shape.
+
+`release command`'s JSON output also carries three additive fields —
+`workflow_command` (`remove`/`add`/`nonjira`/`abort`/`waive`/`none`),
+`workflow_outcome` (`applied`/`rejected`/`ignored`), and `reply_body`
+(the exact PR-reply text, or `null` for `not_a_command`) — computed by
+`release_commands/workflow_outcome.py::map_outcome` and consumed directly
+by the `release-commands` reusable workflow
+(`.github/workflows/release-commands.yml`), which wires this command into
+a real `issue_comment` trigger and posts the reply. `research_close` and
+`malformed` both report `workflow_command: "none"`, since the
+architecture's `command` output has no slot for either — see
+`specs/006-release-commands-workflow/data-model.md` for the full mapping
+table and `research.md` for why.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

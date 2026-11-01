@@ -1,0 +1,46 @@
+# Example thin caller — copy into a service repo as .github/workflows/
+# release.yml and adjust nothing except the pinned tag when upgrading. This
+# file is not executed in delivery-platform itself; there is no real
+# release pull request here to trigger it against (specs/006's spec.md
+# Assumptions, same posture as templates/callers/ci.yml).
+#
+# Principle I (centralise implementation, decentralise configuration): all
+# real logic — the six-form grammar, the authorization rule, the
+# command/outcome mapping — lives in delivery-platform's `release_commands`
+# engine package and its reusable `release-commands` workflow, pinned to an
+# exact tag. This caller only decides WHEN to invoke it: a new comment,
+# and only when that comment is on a pull request (specs/006 spec FR-002,
+# SC-004) — a comment on a plain issue must never reach the `commands` job
+# at all, which is exactly what the `if:` condition below guarantees.
+
+name: release
+
+on:
+  # zizmor: ignore[dangerous-triggers] no checkout of PR/issue code ever
+  # happens anywhere in this trigger's path — the triggering comment's body
+  # is only ever read via the GitHub API into a file and passed to the
+  # fixed six-form parser, never executed as a command or script
+  # (research.md D1/D5, continuing specs/005's D4 discipline).
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  commands:
+    if: github.event.issue.pull_request
+    uses: radicdotai/delivery-platform/.github/workflows/release-commands.yml@v1.0.0  # zizmor: ignore[unpinned-uses] exact-tag pinning is this platform's deliberate convention (CLAUDE.md Principle I: "Pipeline logic lives only here, exact-tag pinned")
+    with:
+      descriptor: .radic/service.yml
+      issue_number: ${{ github.event.issue.number }}
+      comment_id: ${{ github.event.comment.id }}
+      actor: ${{ github.event.comment.user.login }}
+    secrets:
+      DELIVERY_BOT_APP_ID: ${{ secrets.DELIVERY_BOT_APP_ID }}
+      DELIVERY_BOT_PRIVATE_KEY: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+      ATLASSIAN_URL: ${{ secrets.ATLASSIAN_URL }}
+      ATLASSIAN_EMAIL: ${{ secrets.ATLASSIAN_EMAIL }}
+      ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}

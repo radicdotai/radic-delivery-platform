@@ -29,6 +29,21 @@ def test_authorized_command_on_stdin_exits_ok_and_reports_accepted() -> None:
     assert payload["args"] == {"key": "RAD-123"}
 
 
+def test_accepted_command_json_includes_additive_workflow_fields() -> None:
+    result = runner.invoke(
+        app,
+        ["release", "command", *_COMMON_ARGS, "--format", "json"],
+        input="/release remove RAD-123",
+    )
+    payload = json.loads(result.stdout)
+    assert payload["classification"] == "accepted"
+    assert payload["form"] == "release_remove"
+    assert payload["args"] == {"key": "RAD-123"}
+    assert payload["workflow_command"] == "remove"
+    assert payload["workflow_outcome"] == "applied"
+    assert payload["reply_body"]
+
+
 def test_json_and_text_formats_report_the_same_classification() -> None:
     json_result = runner.invoke(
         app, ["release", "command", *_COMMON_ARGS, "--format", "json"], input="/release remove RAD-123"
@@ -54,6 +69,17 @@ def test_malformed_command_exits_invalid_input() -> None:
     assert result.exit_code == int(ExitCode.INVALID_INPUT)
 
 
+def test_malformed_command_json_includes_additive_workflow_fields() -> None:
+    result = runner.invoke(
+        app, ["release", "command", *_COMMON_ARGS, "--format", "json"], input="/release add RAD-123"
+    )
+    payload = json.loads(result.stdout)
+    assert payload["classification"] == "malformed"
+    assert payload["workflow_command"] == "none"
+    assert payload["workflow_outcome"] == "rejected"
+    assert payload["reply_body"]
+
+
 def test_unauthorized_author_exits_policy_failure() -> None:
     result = runner.invoke(
         app,
@@ -70,6 +96,30 @@ def test_unauthorized_author_exits_policy_failure() -> None:
         input="/release remove RAD-123",
     )
     assert result.exit_code == int(ExitCode.POLICY_FAILURE)
+
+
+def test_unauthorized_command_json_includes_additive_workflow_fields() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "release",
+            "command",
+            "--author",
+            "eve",
+            "--release-managers",
+            "alice,bob",
+            "--tech-lead",
+            "bob",
+            "--format",
+            "json",
+        ],
+        input="/release remove RAD-123",
+    )
+    payload = json.loads(result.stdout)
+    assert payload["classification"] == "unauthorized"
+    assert payload["workflow_command"] == "remove"
+    assert payload["workflow_outcome"] == "rejected"
+    assert payload["reply_body"]
 
 
 def test_comment_file_input_is_equivalent_to_stdin(tmp_path: Path) -> None:
