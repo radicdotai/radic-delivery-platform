@@ -1,0 +1,194 @@
+name: release-commands
+
+# The platform's central release-PR slash-command reusable workflow
+# (Reference 2: Workflow Contracts, §3.5). A release manager's comment is
+# the only input this workflow ever acts on as a *command* — and even then,
+# only through specs/005's fixed six-form grammar and authorization check
+# (engine/src/radic_delivery/release_commands/); this workflow never
+# interprets comment text itself.
+#
+# specs/006-release-commands-workflow implements this contract. It does
+# NOT mutate any release-manifest state for an "applied" command (that
+# command group remains unimplemented — see engine/README.md), does NOT
+# write to the platform's durable audit trail (`delivery-records`, a
+# separate, not-yet-built system), and does NOT call Jira despite the
+# ATLASSIAN_* secrets below being declared per the architecture's contract
+# — they are threaded through exactly as specified, unused by any real
+# call, the same honest-reporting pattern specs/003 used for Snyk/image
+# scanning (spec.md Assumptions).
+#
+# research.md D1/D5: the raw comment body and the composed reply text are
+# only ever read from/written to files — never interpolated into a `run:`
+# shell string. research.md D3: a team-membership or Tech-Lead-identity
+# lookup failure fails this job outright (after a best-effort reply),
+# rather than being folded into the "unauthorized" outcome.
+
+on:
+  workflow_call:
+    inputs:
+      descriptor:
+        description: "Accepted for contract compatibility; unused — `release command` does not consume a descriptor."
+        type: string
+        default: .radic/service.yml
+      issue_number:
+        description: "The pull request number the triggering comment was posted on."
+        type: string
+      comment_id:
+        description: "The triggering comment's id."
+        type: string
+      actor:
+        description: "The triggering comment's author (GitHub username)."
+        type: string
+    outputs:
+      command:
+        description: "remove | add | nonjira | abort | waive | none"
+        value: ${{ jobs.handle-command.outputs.command }}
+      outcome:
+        description: "applied | rejected | ignored"
+        value: ${{ jobs.handle-command.outputs.outcome }}
+      reply_comment_id:
+        description: "The id of the reply comment posted back on the pull request, if any."
+        value: ${{ jobs.handle-command.outputs.reply_comment_id }}
+    secrets:
+      DELIVERY_BOT_APP_ID:
+        required: true
+      DELIVERY_BOT_PRIVATE_KEY:
+        required: true
+      ATLASSIAN_URL:
+        required: false
+      ATLASSIAN_EMAIL:
+        required: false
+      ATLASSIAN_API_TOKEN:
+        required: false
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  handle-command:
+    runs-on: ubuntu-latest
+    outputs:
+      command: ${{ steps.release_command.outputs.workflow_command }}
+      outcome: ${{ steps.release_command.outputs.workflow_outcome }}
+      reply_comment_id: ${{ steps.reply.outputs.reply_comment_id }}
+    steps:
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Mint the release bot's GitHub App installation token
+        id: app_token
+        uses: actions/create-github-app-token@v1  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          app-id: ${{ secrets.DELIVERY_BOT_APP_ID }}
+          private-key: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+          # Scope the minted token down to exactly this job's own declared
+          # permissions — never inherit the App's full installation grant.
+          permission-issues: write
+          permission-pull-requests: write
+          permission-contents: write
+
+      - name: Resolve release-managers membership and Tech Lead identity
+        id: identity
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_TECH_LEAD: ${{ vars.RELEASE_TECH_LEAD }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          ACTOR: ${{ inputs.actor }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RELEASE_TECH_LEAD" ]; then
+            echo "::error::RELEASE_TECH_LEAD repository variable is not set — cannot resolve the Tech Lead identity."
+            lookup_failed=true
+          else
+            lookup_failed=false
+          fi
+
+          set +e
+          membership_output=$(gh api "orgs/${REPO_OWNER}/teams/release-managers/memberships/${ACTOR}" 2>&1)
+          membership_status=$?
+          set -e
+
+          if [ "$membership_status" -eq 0 ]; then
+            release_managers="$ACTOR"
+          elif echo "$membership_output" | grep -q "HTTP 404"; then
+            release_managers=""
+          else
+            echo "::error::Could not resolve release-managers membership for ${ACTOR}: $membership_output"
+            lookup_failed=true
+            release_managers=""
+          fi
+
+          {
+            echo "lookup_failed=$lookup_failed"
+            echo "tech_lead=$RELEASE_TECH_LEAD"
+            echo "release_managers=$release_managers"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the triggering comment's body
+        if: steps.identity.outputs.lookup_failed == 'false'
+        uses: ./actions/post-release-command-reply
+        with:
+          mode: fetch
+          github_token: ${{ steps.app_token.outputs.token }}
+          repository: ${{ github.repository }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_file: comment.txt
+
+      - name: Run the release command parser and authorization check
+        if: steps.identity.outputs.lookup_failed == 'false'
+        id: release_command
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          ACTOR: ${{ inputs.actor }}
+          RELEASE_MANAGERS: ${{ steps.identity.outputs.release_managers }}
+          TECH_LEAD: ${{ steps.identity.outputs.tech_lead }}
+        run: |
+          set -euo pipefail
+          uv run --project "$ENGINE_PROJECT" \
+            radic-delivery release command \
+            --comment-file comment.txt \
+            --author "$ACTOR" \
+            --release-managers "$RELEASE_MANAGERS" \
+            --tech-lead "$TECH_LEAD" \
+            --format json > release-command-result.json
+          cat release-command-result.json
+
+          {
+            jq -r '"workflow_command=" + .workflow_command' release-command-result.json
+            jq -r '"workflow_outcome=" + .workflow_outcome' release-command-result.json
+            jq -r '.reply_body // ""' release-command-result.json > reply.txt
+            echo "has_reply=$(jq -r '.reply_body != null' release-command-result.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post the reply (recognized commands only — never for not_a_command)
+        if: steps.identity.outputs.lookup_failed == 'false' && steps.release_command.outputs.has_reply == 'true'
+        id: reply
+        uses: ./actions/post-release-command-reply
+        with:
+          mode: reply
+          github_token: ${{ steps.app_token.outputs.token }}
+          repository: ${{ github.repository }}
+          issue_number: ${{ inputs.issue_number }}
+          comment_file: reply.txt
+
+      - name: Post a best-effort reply when identity could not be resolved
+        if: steps.identity.outputs.lookup_failed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Could not verify authorization for this command (an identity check failed). Please retry, or contact the platform team if this persists." > lookup-failure-reply.txt
+          gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body=@lookup-failure-reply.txt > /dev/null
+
+      - name: Fail the job when identity could not be resolved
+        if: steps.identity.outputs.lookup_failed == 'true'
+        run: |
+          echo "::error::Failing this job because team-membership or Tech-Lead identity could not be resolved (spec FR-008) — never silently treated as authorized or unauthorized."
+          exit 1

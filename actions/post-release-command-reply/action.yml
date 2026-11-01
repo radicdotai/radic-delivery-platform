@@ -1,0 +1,67 @@
+name: Post release-command reply
+description: >-
+  Fetch a PR comment's body by id into a file, or post a reply to a PR by
+  issue number from a file — never interpolating comment/reply text into a
+  shell string (research.md D5, continuing specs/005's D4 discipline).
+  One action, two modes, because both sides of this exchange share the
+  same "typed inputs only, free text stays in files" rule. Every `${{ }}`
+  expression is passed through `env:` rather than inlined into `run:`, per
+  zizmor's template-injection audit — not just the free-text ones.
+
+inputs:
+  mode:
+    description: "fetch (read a comment's body) or reply (post a new comment)."
+    required: true
+  github_token:
+    description: GitHub App installation token to authenticate as.
+    required: true
+  repository:
+    description: "owner/repo to operate against."
+    required: true
+  comment_id:
+    description: "The triggering comment's id. Required for mode: fetch."
+    required: false
+    default: ""
+  comment_file:
+    description: "Where to write the fetched comment body (mode: fetch) or read the reply text from (mode: reply)."
+    required: false
+    default: comment.txt
+  issue_number:
+    description: "The pull request number to reply on. Required for mode: reply."
+    required: false
+    default: ""
+
+outputs:
+  reply_comment_id:
+    description: "The id GitHub assigned to the posted reply (mode: reply only)."
+    value: ${{ steps.reply.outputs.reply_comment_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch comment body to a file
+      if: inputs.mode == 'fetch'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPOSITORY: ${{ inputs.repository }}
+        COMMENT_ID: ${{ inputs.comment_id }}
+        COMMENT_FILE: ${{ inputs.comment_file }}
+      run: |
+        set -euo pipefail
+        gh api "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}" --jq .body > "${COMMENT_FILE}"
+
+    - name: Post reply from a file
+      if: inputs.mode == 'reply'
+      id: reply
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPOSITORY: ${{ inputs.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        COMMENT_FILE: ${{ inputs.comment_file }}
+      run: |
+        set -euo pipefail
+        reply_id=$(gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+          -f body=@"${COMMENT_FILE}" --jq .id)
+        echo "reply_comment_id=$reply_id" >> "$GITHUB_OUTPUT"

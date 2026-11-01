@@ -10,14 +10,18 @@ on:
       - "engine/**"
       - "schemas/**"
       - "policy/**"
-      - ".github/workflows/engine-ci.yml"
+      - ".github/workflows/**"
+      - "actions/**"
+      - "templates/callers/**"
   push:
     branches: [dev]
     paths:
       - "engine/**"
       - "schemas/**"
       - "policy/**"
-      - ".github/workflows/engine-ci.yml"
+      - ".github/workflows/**"
+      - "actions/**"
+      - "templates/callers/**"
 
 jobs:
   test:
@@ -52,3 +56,19 @@ jobs:
 
       - name: Workflow lint
         uses: raven-actions/actionlint@v2
+
+      - name: Workflow security scan (zizmor)
+        # Scoped to specs/006's new files only, not the whole workflows/
+        # actions/ templates tree — a full-tree run surfaces a substantial
+        # pre-existing backlog in specs/001-004's already-merged artifacts
+        # that this feature does not fix (research.md D6's documented scope
+        # correction). --min-severity medium also keeps the pre-existing,
+        # repo-wide "help"-tier self-repository style suggestion (already
+        # present on every `./actions/...` reference since feature 002)
+        # from being treated as a failure here.
+        working-directory: ${{ github.workspace }}
+        run: |
+          uvx zizmor --min-severity medium \
+            .github/workflows/release-commands.yml \
+            actions/post-release-command-reply/action.yml \
+            templates/callers/release.yml

@@ -32,6 +32,7 @@ from radic_delivery.policy.exceptions import check as check_exception
 from radic_delivery.release_commands.authorization import authorize as authorize_command
 from radic_delivery.release_commands.grammar import parse as parse_command
 from radic_delivery.release_commands.result import CommandCheckResult
+from radic_delivery.release_commands.workflow_outcome import map_outcome
 from radic_delivery.security.aggregator import scan as scan_security
 from radic_delivery.security.result import SecurityScanResult
 
@@ -309,7 +310,13 @@ app.add_typer(release_app, name="release")
 
 
 def _emit_command_check_result(format: OutputFormat, result: CommandCheckResult) -> None:
-    payload = result.to_dict()
+    outcome = map_outcome(result)
+    payload = {
+        **result.to_dict(),
+        "workflow_command": outcome.command,
+        "workflow_outcome": outcome.outcome,
+        "reply_body": outcome.reply_body,
+    }
     if format is OutputFormat.json:
         _emit(format, payload, [])
         return
@@ -320,6 +327,10 @@ def _emit_command_check_result(format: OutputFormat, result: CommandCheckResult)
         text_lines.append(f"  args: {result.args}")
     if result.detail:
         text_lines.append(f"  detail: {result.detail}")
+    text_lines.append(f"  workflow_command: {outcome.command}")
+    text_lines.append(f"  workflow_outcome: {outcome.outcome}")
+    if outcome.reply_body is not None:
+        text_lines.append(f"  reply_body: {outcome.reply_body}")
     _emit(format, payload, text_lines)
 
 
