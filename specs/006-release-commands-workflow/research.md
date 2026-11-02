@@ -197,3 +197,37 @@ that threshold and isn't treated as a failure here or there). The
 pre-existing backlog above is recorded here, explicitly, as a flagged gap
 for a dedicated future "workflow security hardening" pass across specs/
 001-004's artifacts — not fixed, and not silently left undiscovered.
+
+### D7 — Post-merge correction: `--actor` flag naming, confirmed against Confluence (2026-11-02)
+
+While researching the next feature (release propose/cut), Confluence
+Reference 3: Schemas, Identity and Commands (pageId 419954699) was read
+directly for the first time against this feature's actual CLI contract —
+it had only been read secondhand (via a research fork's summary) when
+specs/005 was specified. Reference 3's command table names this command's
+author-identity flag `--actor LOGIN`; this feature (and specs/005 before
+it) had instead built `--author`. There is no substantive reason for the
+divergence — it is a naming inconsistency, not a deliberate improvement —
+so the CLI, its tests, `release-commands.yml`, and both specs' quickstart
+docs were corrected to `--actor` to match the authoritative source exactly,
+rather than carrying the inconsistency forward or rewriting Confluence to
+match an arbitrary choice.
+
+By contrast, two other differences found in the same comparison — this
+feature's `--release-managers`/`--tech-lead` explicit-identity-input design
+(Confluence's table shows no such flags, implying the engine would resolve
+identity itself) and its `classification`/`form`/`args`/`workflow_command`/
+`workflow_outcome`/`reply_body` field shape (Confluence's illustrative
+example shows a flatter `command`/`key`/`outcome`/`reply` shape) — were
+reviewed and confirmed as genuine, deliberate improvements over Confluence's
+illustrative sketch: the explicit-identity-input split keeps this command's
+core logic pure and unit-testable with zero GitHub API dependency (the same
+split already used for `gate evaluate` not installing a toolchain and
+`security scan` not installing scanners), and the richer field shape
+actually generalizes across all six command forms, where a flat `key` field
+would not (e.g. `release nonjira`'s `pr`/`reason` pair has no natural `key`).
+These were pushed back into Confluence itself (Reference 3 §6, new §6.1)
+rather than into this codebase, per the architecture's own stated
+precedence (CLAUDE.md: Confluence is the authoritative design source) and
+the same confirm-before-formalizing treatment given to specs/004's
+`parity.allow` convention.

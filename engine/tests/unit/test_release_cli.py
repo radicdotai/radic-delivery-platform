@@ -13,7 +13,7 @@ from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
 
 runner = CliRunner()
 
-_COMMON_ARGS = ["--author", "alice", "--release-managers", "alice,bob", "--tech-lead", "bob"]
+_COMMON_ARGS = ["--actor", "alice", "--release-managers", "alice,bob", "--tech-lead", "bob"]
 
 
 def test_authorized_command_on_stdin_exits_ok_and_reports_accepted() -> None:
@@ -86,7 +86,7 @@ def test_unauthorized_author_exits_policy_failure() -> None:
         [
             "release",
             "command",
-            "--author",
+            "--actor",
             "eve",
             "--release-managers",
             "alice,bob",
@@ -104,7 +104,7 @@ def test_unauthorized_command_json_includes_additive_workflow_fields() -> None:
         [
             "release",
             "command",
-            "--author",
+            "--actor",
             "eve",
             "--release-managers",
             "alice,bob",

@@ -151,7 +151,7 @@ jobs:
           uv run --project "$ENGINE_PROJECT" \
             radic-delivery release command \
             --comment-file comment.txt \
-            --author "$ACTOR" \
+            --actor "$ACTOR" \
             --release-managers "$RELEASE_MANAGERS" \
             --tech-lead "$TECH_LEAD" \
             --format json > release-command-result.json
