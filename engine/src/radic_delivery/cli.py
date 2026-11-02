@@ -33,6 +33,10 @@ from radic_delivery.notes.result import build_check_result
 from radic_delivery.notes.writer import write as write_change_note
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
+from radic_delivery.release.candidates import load_candidates
+from radic_delivery.release.git_history import GitHistoryError, reachable_shas, resolve_ref
+from radic_delivery.release.manifest import build_manifest
+from radic_delivery.release.selector import select as select_release_candidates
 from radic_delivery.release_commands.authorization import authorize as authorize_command
 from radic_delivery.release_commands.grammar import parse as parse_command
 from radic_delivery.release_commands.result import CommandCheckResult
@@ -372,7 +376,121 @@ def release_command(
     raise typer.Exit(code=int(ExitCode.POLICY_FAILURE))  # unauthorized
 
 
-_RELEASE_NOT_IMPLEMENTED = ["propose", "cut", "verify-promotion", "finalise"]
+@release_app.command("propose")
+def release_propose(
+    repo: str = typer.Option(..., "--repo", help="e.g. radicdotai/web-bff."),
+    base: str = typer.Option(..., "--base", help="dev or main."),
+    repo_dir: Path = typer.Option(
+        Path("."), "--repo-dir", help="Local git checkout to inspect (same flag name as `tests inventory`)."
+    ),
+    change_notes_dir: Path = typer.Option(
+        Path("."), "--change-notes-dir", help="Root of the local change-notes/ tree `notes write` produces."
+    ),
+    tickets: str | None = typer.Option(
+        None, "--tickets", help="Comma-separated ticket keys considered ready for this release."
+    ),
+    non_jira_prs: str | None = typer.Option(
+        None, "--non-jira-prs", help="Comma-separated PR numbers merged without a Jira key to include."
+    ),
+    dev_green_failed: str | None = typer.Option(
+        None,
+        "--dev-green-failed",
+        help="Comma-separated commit SHAs known to have failed the pre-release regression check.",
+    ),
+    since_sha: str | None = typer.Option(
+        None,
+        "--since-sha",
+        help="Exclude commits already an ancestor of this SHA (the previous release marker).",
+    ),
+    release_id: str | None = typer.Option(None, "--release-id", help="Override; default <today>-1."),
+    kind: str = typer.Option("release", "--kind", help="release|hotfix."),
+    initiator: str = typer.Option(..., "--initiator"),
+    out_dir: Path = typer.Option(
+        Path("."), "--out-dir", help="Local root to write the manifest under."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Never write the manifest locally (research.md D6)."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Select ready tickets/commits and write a draft release manifest.
+
+    Ticket readiness and dev-green status are explicit inputs — this
+    command never queries Jira or a test-results store itself (FR-003,
+    FR-004, FR-010).
+    """
+    ready = {key.strip() for key in tickets.split(",") if key.strip()} if tickets else set()
+    non_jira = {int(pr.strip()) for pr in non_jira_prs.split(",") if pr.strip()} if non_jira_prs else set()
+    failed_shas = (
+        {sha.strip() for sha in dev_green_failed.split(",") if sha.strip()} if dev_green_failed else set()
+    )
+
+    try:
+        base_sha = resolve_ref(repo_dir, base)
+        reachable = reachable_shas(repo_dir, base=base, since_sha=since_sha)
+    except GitHistoryError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+
+    candidates, load_issues = load_candidates(change_notes_dir, repo)
+    candidates = [candidate for candidate in candidates if candidate.sha in reachable]
+
+    if load_issues:
+        payload = {
+            "ok": False,
+            "issues": [{"path": issue.path, "message": issue.message} for issue in load_issues],
+        }
+        _emit(format, payload, [f"INVALID: {len(load_issues)} change-note record(s) could not be read."])
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    selection = select_release_candidates(
+        candidates, ready_tickets=ready, dev_green_failed=failed_shas, non_jira_prs=non_jira
+    )
+    resolved_release_id = release_id or f"{date.today():%Y.%m.%d}-1"
+    result = build_manifest(
+        selection,
+        repo=repo,
+        base_branch=base,
+        base_sha=base_sha,
+        release_id=resolved_release_id,
+        initiator=initiator,
+        kind=kind,
+    )
+
+    if not result.ok:
+        _emit(
+            format,
+            result.to_dict(),
+            [f"INVALID: {len(result.issues)} issue(s) found."]
+            + [f"  [{issue.path}] {issue.message}" for issue in result.issues],
+        )
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    local_path = None
+    if not dry_run:
+        assert result.manifest is not None
+        target = out_dir / "releases" / f"{resolved_release_id}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(result.manifest, indent=2))
+        local_path = str(target)
+
+    payload = result.to_dict()
+    if local_path is not None:
+        payload["local_path"] = local_path
+    text_lines = [
+        "OK: release proposal computed.",
+        f"  proposed tickets: {len(selection.tickets)}",
+        f"  held back: {len(selection.held_back)}",
+        f"  non-jira PRs included: {len(selection.non_jira_prs)}",
+    ]
+    if local_path is not None:
+        text_lines.append(f"  local_path: {local_path}")
+    _emit(format, payload, text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+_RELEASE_NOT_IMPLEMENTED = ["cut", "verify-promotion", "finalise"]
 
 
 def _make_release_stub(subcommand_name: str) -> Any:
