@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/radicdotai/delivery-platform/schemas/release-manifest.schema.json",
-  "title": "Release Manifest",
-  "description": "Shape of releases/<id>.yaml in radicdotai/delivery-records. Stable contract for a later feature; not read or written by the engine scaffold.",
+  "title": "Release Manifest (releases/ID.yaml)",
+  "description": "Shape of releases/<id>.yaml in radicdotai/delivery-records, as validated and written (status: proposed only) by `radic-delivery release propose` (specs/008-release-propose). approvals/digests/gates/cloud_deploy are optional here since they are populated only by later pipeline stages (release cut, prod approval, Cloud Deploy) this platform has not built yet (research.md D1).",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": [
     "schema_version", "release_id", "kind", "status", "repo", "created_at",
-    "initiator", "base", "selection", "approvals", "digests", "gates"
+    "initiator", "base", "selection"
   ],
   "properties": {
     "schema_version": { "const": 1 },
@@ -23,13 +23,278 @@
     "repo": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+$" },
     "created_at": { "type": "string", "format": "date-time" },
     "initiator": { "type": "string" },
-    "base": { "type": "string" },
-    "selection": { "type": "object" },
-    "approvals": { "type": "object" },
-    "digests": { "type": "object" },
-    "cloud_deploy": { "type": "object" },
-    "gates": { "type": "object" },
-    "main": { "type": "object" },
-    "platform_tag": { "type": "string" }
+    "base": {
+      "type": "object",
+      "required": ["branch", "sha"],
+      "properties": {
+        "branch": { "type": "string", "enum": ["dev", "main"] },
+        "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      }
+    },
+    "release_branch": { "type": "string", "pattern": "^release/" },
+    "release_head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "selection": {
+      "type": "object",
+      "required": ["tickets", "held_back"],
+      "properties": {
+        "all_of_dev": { "type": "boolean" },
+        "tickets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "commits"],
+            "properties": {
+              "key": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$" },
+              "origin": { "type": "string", "enum": ["bot-proposal", "added", "migration-dependency"] },
+              "override_reason": {
+                "type": "string",
+                "description": "required when a non-ready ticket was added"
+              },
+              "commits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["dev_sha"],
+                  "description": "release_sha/cherry_pick_x are added only once `release cut` performs the actual cherry-pick (research.md D1) — not required at the `proposed` stage this feature produces.",
+                  "properties": {
+                    "dev_sha": { "type": "string" },
+                    "release_sha": { "type": "string" },
+                    "cherry_pick_x": { "const": true }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "non_jira_prs": {
+          "type": "array",
+          "description": "merged PRs with no Jira key released through the non_jira_prs input; each needs a reason and a second approver",
+          "items": {
+            "type": "object",
+            "required": ["pr", "reason", "commits"],
+            "properties": {
+              "pr": { "type": "integer" },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "second_approver": {
+                "type": ["string", "null"],
+                "description": "GitHub login; not the initiator and not the PR author. null until filled in, e.g. by `release command nonjira` (research.md D1)."
+              },
+              "pr_author": { "type": "string" },
+              "commits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["dev_sha"],
+                  "properties": {
+                    "dev_sha": { "type": "string" },
+                    "release_sha": { "type": "string" },
+                    "cherry_pick_x": { "const": true }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "held_back": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "reason"],
+            "properties": {
+              "key": { "type": "string" },
+              "reason": { "type": "string" },
+              "removed_by": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "required": ["release_pr"],
+      "properties": {
+        "release_pr": {
+          "type": "object",
+          "required": ["number", "approver"],
+          "properties": {
+            "number": { "type": "integer" },
+            "approver": { "type": "string" },
+            "approver_is_not_initiator": { "const": true }
+          }
+        },
+        "prod": {
+          "type": "object",
+          "properties": {
+            "approver": { "type": "string" },
+            "initiator_is_not_approver": { "const": true },
+            "break_glass": { "type": "boolean" },
+            "break_glass_approvers": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "type": "string" },
+              "description": "Tech Lead (Vijit) and Deputy (Aditya); two distinct named people"
+            }
+          }
+        },
+        "waivers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "reason", "by"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["dev-green"] },
+              "reason": { "type": "string" },
+              "by": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "digests": {
+      "type": "object",
+      "properties": {
+        "stage": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "prod": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "previous_prod": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "rollback target"
+        },
+        "reused_existing_build": { "type": "boolean" }
+      }
+    },
+    "cloud_deploy": {
+      "type": "object",
+      "required": ["project", "region", "pipeline", "release"],
+      "description": "Cloud Deploy records for this release; all names are the objects created by the engine",
+      "properties": {
+        "project": { "const": "radicai-production", "description": "release plane project (OI-5)" },
+        "region": { "const": "us-central1" },
+        "pipeline": { "type": "string", "pattern": "^[a-z][a-z0-9-]*-rel$" },
+        "release": {
+          "type": "string",
+          "pattern": "^r-[a-z0-9-]+$",
+          "description": "r-<release id with dashes>-<sha7>; a hotfix release id ends in -hf"
+        },
+        "annotations": {
+          "type": "object",
+          "description": "commit, digest, run-url, manifest, initiator as set on the release"
+        },
+        "rollouts": {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "object",
+              "required": ["rollout", "state"],
+              "properties": {
+                "rollout": { "type": "string" },
+                "state": { "type": "string", "enum": ["SUCCEEDED", "FAILED", "IN_PROGRESS"] },
+                "verify": { "type": "string", "enum": ["pass", "fail", "not-run"] },
+                "finished_at": { "type": "string", "format": "date-time" }
+              }
+            },
+            "prod": {
+              "type": "object",
+              "required": ["rollout", "state"],
+              "properties": {
+                "rollout": { "type": "string" },
+                "state": {
+                  "type": "string",
+                  "enum": ["PENDING_APPROVAL", "SUCCEEDED", "FAILED", "REJECTED", "IN_PROGRESS"]
+                },
+                "promoted_by_sa": {
+                  "type": "string",
+                  "description": "cd-prod-promoter@radicai-production.iam.gserviceaccount.com"
+                },
+                "approved_by_sa": {
+                  "type": "string",
+                  "description": "cd-prod-approver@radicai-production.iam.gserviceaccount.com; never equal to promoted_by_sa"
+                },
+                "github_run": { "type": "string", "format": "uri" },
+                "verify": { "type": "string", "enum": ["pass", "fail", "not-run"] },
+                "finished_at": { "type": "string", "format": "date-time" }
+              }
+            },
+            "rollback": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["rollout", "reason"],
+                "properties": {
+                  "rollout": { "type": "string" },
+                  "to_release": { "type": "string" },
+                  "reason": { "type": "string" },
+                  "path": {
+                    "type": "string",
+                    "enum": ["cloud-deploy-rollback", "emergency-traffic-shift", "break-glass-run-deploy"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "properties": {
+        "release_gate": {
+          "type": "object",
+          "properties": {
+            "result": { "type": "string", "enum": ["pass", "fail", "missing"] },
+            "digest": { "type": "string" },
+            "run_url": { "type": "string" }
+          }
+        },
+        "stage_regression": {
+          "type": "object",
+          "properties": {
+            "result": { "type": "string", "enum": ["pass", "fail", "missing"] },
+            "records": {
+              "type": "array",
+              "items": { "type": "string", "description": "paths of test-result records" }
+            }
+          }
+        },
+        "promotion_verification": {
+          "type": "object",
+          "properties": {
+            "ancestry": { "type": "boolean" },
+            "tree": { "type": "boolean" },
+            "tag": { "type": "boolean" },
+            "release_digest_equals_stage_digest": {
+              "type": "boolean",
+              "description": "digest read from the Cloud Deploy release equals the stage-tested digest"
+            }
+          }
+        }
+      }
+    },
+    "main": {
+      "type": "object",
+      "description": "set only after prod succeeded",
+      "properties": {
+        "fast_forwarded_to": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "backport": {
+      "type": "object",
+      "properties": {
+        "pr": { "type": "integer" },
+        "into": { "const": "dev" }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "properties": {
+        "performed": { "type": "boolean" },
+        "to_digest": { "type": "string" },
+        "duration_seconds": { "type": "integer" }
+      }
+    },
+    "platform_tag": { "type": "string", "pattern": "^v1\\.[0-9]+\\.[0-9]+$" }
   }
 }

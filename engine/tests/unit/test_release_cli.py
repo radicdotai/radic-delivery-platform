@@ -137,5 +137,8 @@ def test_comment_file_input_is_equivalent_to_stdin(tmp_path: Path) -> None:
 
 
 def test_other_release_subcommands_remain_not_implemented() -> None:
-    result = runner.invoke(app, ["release", "propose"])
+    """`propose` was this test's original example (specs/005/006); it is
+    now implemented (specs/008-release-propose), so this targets `cut`,
+    a subcommand still stubbed as of this feature."""
+    result = runner.invoke(app, ["release", "cut"])
     assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
