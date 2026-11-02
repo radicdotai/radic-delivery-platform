@@ -9,7 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from radic_delivery.cli import app
-from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
+from radic_delivery.exit_codes import ExitCode
 
 runner = CliRunner()
 
@@ -134,11 +134,3 @@ def test_comment_file_input_is_equivalent_to_stdin(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["classification"] == "accepted"
     assert payload["form"] == "research_close"
-
-
-def test_other_release_subcommands_remain_not_implemented() -> None:
-    """`propose` then `cut` were this test's prior examples (specs/005/006,
-    specs/008, specs/009); both are now implemented, so this targets
-    `verify-promotion`, a subcommand still stubbed as of this feature."""
-    result = runner.invoke(app, ["release", "verify-promotion"])
-    assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
