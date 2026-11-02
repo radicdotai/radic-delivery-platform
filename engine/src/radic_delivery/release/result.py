@@ -1,9 +1,18 @@
-"""Candidate / Selection / ProposeResult (data-model.md)."""
+"""Candidate / Selection / ProposeResult / CutResult (data-model.md)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+CutReason = Literal[
+    "release_id_mismatch",
+    "hotfix_mismatch",
+    "status_mismatch",
+    "missing_change_note",
+    "cherry_pick_conflict",
+    "git_error",
+]
 
 
 @dataclass(frozen=True)
@@ -80,4 +89,24 @@ class ProposeResult:
             "manifest": self.manifest,
             "issues": [{"path": issue.path, "message": issue.message} for issue in self.issues],
             "non_jira_prs_not_found": self.non_jira_prs_not_found,
+        }
+
+
+@dataclass(frozen=True)
+class CutResult:
+    ok: bool
+    manifest: dict[str, Any]
+    reason: CutReason | None = None
+    detail: str = ""
+    failed_sha: str | None = None
+    dry_run: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "manifest": self.manifest,
+            "reason": self.reason,
+            "detail": self.detail,
+            "failed_sha": self.failed_sha,
+            "dry_run": self.dry_run,
         }

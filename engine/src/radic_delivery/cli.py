@@ -34,6 +34,7 @@ from radic_delivery.notes.writer import write as write_change_note
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
 from radic_delivery.release.candidates import load_candidates
+from radic_delivery.release.cut import cut as cut_release
 from radic_delivery.release.git_history import GitHistoryError, reachable_shas, resolve_ref
 from radic_delivery.release.manifest import build_manifest
 from radic_delivery.release.selector import select as select_release_candidates
@@ -490,7 +491,65 @@ def release_propose(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
-_RELEASE_NOT_IMPLEMENTED = ["cut", "verify-promotion", "finalise"]
+@release_app.command("cut")
+def release_cut(
+    manifest_path: Path = typer.Option(..., "--manifest", help="Path to the draft (proposed) manifest."),
+    release_id: str = typer.Option(..., "--release-id"),
+    hotfix: bool = typer.Option(False, "--hotfix/--no-hotfix"),
+    repo_dir: Path = typer.Option(Path("."), "--repo-dir", help="Local git checkout to cut from."),
+    change_notes_dir: Path = typer.Option(
+        Path("."), "--change-notes-dir", help="Root of the local change-notes/ tree `notes write` produces."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate and resolve everything without touching the repo or the manifest."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Create release/<id> from main and cherry-pick the manifest's
+    selection onto it (FR-001 through FR-009).
+
+    Never branches from anything but the fixed production line, never
+    cherry-picks in anything but the commits' own chronological order,
+    and never leaves a partial branch or an unchanged-but-claimed-cut
+    manifest behind on failure.
+    """
+    manifest = json.loads(manifest_path.read_text())
+
+    try:
+        result = cut_release(
+            manifest,
+            repo_dir=repo_dir,
+            change_notes_dir=change_notes_dir,
+            release_id=release_id,
+            hotfix=hotfix,
+            dry_run=dry_run,
+        )
+    except GitHistoryError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+
+    if not result.ok:
+        text_lines = [f"FAILED: {result.reason}", f"  detail: {result.detail}"]
+        if result.failed_sha:
+            text_lines.append(f"  failed_sha: {result.failed_sha}")
+        _emit(format, result.to_dict(), text_lines)
+        if result.reason == "cherry_pick_conflict":
+            raise typer.Exit(code=int(ExitCode.INFRA_ERROR))
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    if not dry_run:
+        manifest_path.write_text(json.dumps(result.manifest, indent=2))
+
+    text_lines = ["OK: release cut." if not dry_run else "OK: dry run — nothing was changed."]
+    if not dry_run:
+        text_lines.append(f"  release_branch: {result.manifest['release_branch']}")
+        text_lines.append(f"  release_head: {result.manifest['release_head']}")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+_RELEASE_NOT_IMPLEMENTED = ["verify-promotion", "finalise"]
 
 
 def _make_release_stub(subcommand_name: str) -> Any:
