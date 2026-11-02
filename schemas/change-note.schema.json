@@ -2,25 +2,56 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/radicdotai/delivery-platform/schemas/change-note.schema.json",
   "title": "Change Note",
-  "description": "Shape of gs://radicai-release-records/change-notes/<repo>/<sha>.json. Stable contract for a later feature; not read or written by the engine scaffold.",
+  "description": "Shape of gs://radicai-release-records/change-notes/<repo>/<sha>.json, as validated and written by `radic-delivery notes write` (specs/007-change-note-capture).",
   "type": "object",
-  "additionalProperties": true,
-  "required": ["repo", "sha", "type", "audience", "title", "summary", "jira_key"],
+  "additionalProperties": false,
+  "required": ["schema_version", "repo", "sha", "type", "audience", "title", "summary", "jira_key"],
   "properties": {
+    "schema_version": { "const": 1 },
     "repo": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+$" },
     "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "pr_number": { "type": "integer" },
     "type": {
       "type": "string",
       "enum": ["feature", "fix", "improvement", "chore", "security", "docs", "internal"]
     },
     "audience": { "type": "string", "enum": ["customer", "internal", "none"] },
-    "title": { "type": "string", "minLength": 1 },
-    "summary": { "type": "string", "minLength": 1 },
-    "jira_key": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$" },
-    "linked_prs": { "type": "array", "items": { "type": "integer" } },
-    "migration": { "type": "object" },
+    "title": { "type": "string", "minLength": 3, "maxLength": 140 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "jira_key": {
+      "anyOf": [
+        { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$" },
+        { "const": "None" }
+      ],
+      "description": "A real Jira key, or the literal 'None' for a change shipped without one (specs/007 research.md D1)."
+    },
+    "linked_prs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+#[0-9]+$" },
+      "description": "Cross-repo PR references, e.g. radicdotai/frontend-v2#456."
+    },
+    "migration": { "type": "boolean", "default": false },
     "uat_escape": { "type": "boolean" },
-    "regression_test_added": { "type": "boolean" },
-    "dev_deploy": { "type": "object" }
+    "regression_test_added": {
+      "type": "boolean",
+      "description": "For uat_escape fixes: the same PR added the regression test."
+    },
+    "author": { "type": "string" },
+    "merged_at": { "type": "string", "format": "date-time" },
+    "dev_deploy": {
+      "type": "object",
+      "properties": {
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "cd_release": {
+          "type": "string",
+          "description": "Cloud Deploy release on the -dev pipeline, for example d-3fa9c21-418."
+        },
+        "post_deploy_result": {
+          "type": "string",
+          "enum": ["pass", "fail", "pending"],
+          "description": "Read by the dev-green gate (a later feature)."
+        }
+      }
+    }
   }
 }

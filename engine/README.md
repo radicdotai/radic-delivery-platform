@@ -3,13 +3,15 @@
 The `radic-delivery` CLI: the single supported code path for inspecting and
 validating this platform's service descriptors and policy exceptions, for
 evaluating a service's CI quality gate, for scanning a service for security
-findings, for linting a service's Cloud Deploy manifests, and for parsing
-and authorizing release-PR slash commands. See
+findings, for linting a service's Cloud Deploy manifests, for parsing
+and authorizing release-PR slash commands, and for capturing change-note
+records and checking release-note completeness. See
 `specs/001-engine-scaffold/`, `specs/002-ci-gate-workflow/`,
 `specs/003-security-scanning/`, `specs/004-deploy-yaml-lint/`,
-`specs/005-release-command-parser/`, and
-`specs/006-release-commands-workflow/` for the full specification, plan,
-and design rationale behind this package.
+`specs/005-release-command-parser/`,
+`specs/006-release-commands-workflow/`, and
+`specs/007-change-note-capture/` for the full specification, plan, and
+design rationale behind this package.
 
 ## Command surface
 
@@ -22,8 +24,9 @@ radic-delivery gate evaluate --mode release-gate <...>    # not implemented yet 
 radic-delivery security scan --scope source|iac|all <...> # implemented (report-only — never blocks)
 radic-delivery deploy lint <...>                          # implemented (binary — fails on a bad manifest)
 radic-delivery release command <...>                      # implemented (parses + authorizes a PR comment)
+radic-delivery notes write <...>                          # implemented (builds + validates a change-note record)
+radic-delivery notes check --pr-body-file <...>           # implemented (warns, or blocks with --require-jira-key)
 
-radic-delivery notes ...        # not implemented yet
 radic-delivery tests ...        # not implemented yet
 radic-delivery release propose|cut|verify-promotion|finalise   # not implemented yet
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
@@ -97,6 +100,28 @@ a real `issue_comment` trigger and posts the reply. `research_close` and
 architecture's `command` output has no slot for either — see
 `specs/006-release-commands-workflow/data-model.md` for the full mapping
 table and `research.md` for why.
+
+`notes write` builds a change-note record from fully-explicit CLI inputs
+(never fetching a PR's title/body/author from GitHub itself — that
+remains the calling workflow's job), validates it against
+`schemas/change-note.schema.json`, and writes it to a local path. The real
+`gs://radicai-release-records/...` upload is not implemented; the result
+always reports `upload_status: "not_available"`, never silently omitted or
+faked as successful. `jira_key` accepts either a real ticket key or the
+literal `"None"` for a change shipped without one — this schema
+accommodation, and the full tightened schema, are new in this feature (the
+schema existed since feature 001 but was an intentionally loose
+placeholder until now). See `specs/007-change-note-capture/data-model.md`
+for the full record shape.
+
+`notes check` reads a PR body from a file (never a raw CLI text argument)
+and classifies it as `has_jira_key`, `explicit_none` (the PR body states
+`Jira: None`), or `incomplete` (neither). Without `--require-jira-key` an
+incomplete body is reported but never fails the command (exit `0`); with
+it, an incomplete body fails (exit `3`) — the same report-only-before-
+blocking rollout discipline this platform already applies to its CI gate
+and security scan. See `specs/007-change-note-capture/research.md` D2 for
+the exact `Jira: KEY`/`Jira: None` text convention recognized.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't
