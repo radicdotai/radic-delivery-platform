@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/radicdotai/delivery-platform/schemas/test-result.schema.json",
   "title": "Test Result Record",
-  "description": "Shape of releases/<id>/test-results/<environment>-<repo>-<suite>.json. Stable contract for a later feature; not read or written by the engine scaffold.",
+  "description": "Shape of releases/<id>/test-results/<environment>-<repo>-<suite>.json, as validated and written by `radic-delivery records put-test-result` (specs/010-test-result-capture).",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": [
     "schema_version", "repo", "environment", "release_id", "digest", "commit",
     "suite", "runner", "started_at", "finished_at", "result", "counts",
@@ -14,11 +14,17 @@
     "schema_version": { "const": 1 },
     "repo": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+$" },
     "environment": { "type": "string", "enum": ["dev", "stage"] },
-    "release_id": { "type": "string", "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9]+(-hf)?$" },
+    "release_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9]+(-hf)?$",
+      "description": "null for a dev-environment run that happens before any release exists."
+    },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "suite": { "type": "string", "minLength": 1 },
     "runner": { "type": "string", "enum": ["pytest", "playwright"] },
+    "scope": { "type": "string", "enum": ["regression", "full", "smoke"], "description": "stage must be full" },
+    "target_url": { "type": "string", "format": "uri" },
     "started_at": { "type": "string", "format": "date-time" },
     "finished_at": { "type": "string", "format": "date-time" },
     "result": { "type": "string", "enum": ["pass", "fail", "error", "timeout"] },
@@ -30,7 +36,7 @@
         "passed": { "type": "integer", "minimum": 0 },
         "failed": { "type": "integer", "minimum": 0 },
         "skipped": { "type": "integer", "minimum": 0 },
-        "quarantined": { "type": "integer", "minimum": 0 }
+        "quarantined": { "type": "integer", "minimum": 0, "description": "run non-blocking and reported" }
       }
     },
     "skip_budget": {
@@ -41,26 +47,43 @@
         "exceptions": { "type": "array", "items": { "type": "string", "pattern": "^EXC-[0-9]{4}$" } }
       }
     },
-    "run_url": { "type": "string", "format": "uri" },
+    "tags_run": { "type": "array", "items": { "type": "string" } },
+    "seeded_tenant": {
+      "type": "string",
+      "description": "id of the seeded test tenant used for @seeded and @writes tests"
+    },
     "cloud_deploy": {
       "type": "object",
+      "required": ["pipeline", "release", "rollout", "rollout_state"],
+      "description": "the Cloud Deploy rollout the suite ran against; the record is only valid for this release and digest",
       "properties": {
-        "pipeline": { "type": "string" },
-        "target": { "type": "string" },
-        "release": { "type": "string" },
+        "project": { "type": "string" },
+        "pipeline": { "type": "string", "pattern": "^[a-z][a-z0-9-]*-(dev|rel)$" },
+        "target": { "type": "string", "pattern": "^[a-z][a-z0-9-]*-(dev|stage)$" },
+        "release": { "type": "string", "pattern": "^(d|r)-[a-z0-9-]+$" },
         "rollout": { "type": "string" },
-        "rollout_state": { "const": "SUCCEEDED" },
-        "verify": { "type": "boolean" }
+        "rollout_state": { "const": "SUCCEEDED", "description": "a record is written only after the rollout succeeded" },
+        "verify": {
+          "type": "string",
+          "enum": ["pass", "fail", "not-run"],
+          "description": "Cloud Deploy verify container result (readiness and health)"
+        }
       }
-    }
-  },
-  "if": {
-    "properties": { "environment": { "const": "stage" } }
-  },
-  "then": {
-    "properties": {
-      "scope": { "const": "full" }
     },
-    "required": ["scope"]
-  }
+    "run_url": { "type": "string", "format": "uri" },
+    "report_uri": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "environment": { "const": "stage" } } },
+      "then": {
+        "properties": { "scope": { "const": "full" }, "release_id": { "type": "string" } },
+        "required": ["scope"]
+      }
+    },
+    {
+      "if": { "properties": { "counts": { "properties": { "skipped": { "minimum": 1 } } } } },
+      "then": { "properties": { "result": { "const": "fail" } } }
+    }
+  ]
 }
