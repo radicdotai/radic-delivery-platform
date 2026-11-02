@@ -33,6 +33,8 @@ from radic_delivery.notes.result import build_check_result
 from radic_delivery.notes.writer import write as write_change_note
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
+from radic_delivery.records.validator import validate as validate_test_result
+from radic_delivery.records.writer import write as write_test_result
 from radic_delivery.release.candidates import load_candidates
 from radic_delivery.release.cut import cut as cut_release
 from radic_delivery.release.git_history import GitHistoryError, reachable_shas, resolve_ref
@@ -715,11 +717,72 @@ def exceptions_check(
     raise typer.Exit(code=int(exit_code))
 
 
+# --- records ---------------------------------------------------------------
+
+records_app = typer.Typer(help="Validate and store test-result records.")
+app.add_typer(records_app, name="records")
+
+
+@records_app.command("put-test-result")
+def records_put_test_result(
+    file: Path = typer.Option(..., "--file", help="Path to a complete test-result record (JSON)."),
+    release_id: str | None = typer.Option(
+        None, "--release-id", help="Cross-checked against the record's own release_id, if present."
+    ),
+    out_dir: Path = typer.Option(Path("."), "--out-dir", help="Local root to write the record under."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Validate and store one test-result record (FR-001 through FR-009).
+
+    Never fetches or verifies anything live (no Jira/GitHub/GCP call) —
+    every field, including `cloud_deploy`, is trusted, structurally-
+    validated input (FR-010).
+    """
+    record = json.loads(file.read_text())
+    issues = validate_test_result(record, release_id)
+
+    if issues:
+        payload: dict[str, Any] = {
+            "ok": False,
+            "local_path": None,
+            "result": None,
+            "issues": [{"path": issue.path, "message": issue.message} for issue in issues],
+            "upload_status": None,
+        }
+        _emit(
+            format,
+            payload,
+            [f"INVALID: {len(issues)} issue(s) found."]
+            + [f"  [{issue.path}] {issue.message}" for issue in issues],
+        )
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    local_path = write_test_result(record, out_dir=out_dir)
+    payload = {
+        "ok": True,
+        "local_path": local_path,
+        "result": record["result"],
+        "issues": [],
+        "upload_status": "not_available",
+    }
+    _emit(
+        format,
+        payload,
+        [
+            "OK: test-result record stored.",
+            f"  result: {record['result']}",
+            f"  local_path: {local_path}",
+            "  upload_status: not_available",
+        ],
+    )
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
 # --- not-yet-implemented command groups ------------------------------------
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["tests", "records", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["tests", "rollback", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:
