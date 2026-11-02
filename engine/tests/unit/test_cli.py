@@ -60,10 +60,11 @@ def test_not_implemented_command_group_has_distinct_exit_code() -> None:
     """spec Edge Case / FR-003: not-yet-implemented commands are not success,
     not a crash, and not confused with the four real exit codes.
 
-    `gate` was this feature's example when this test was written; it has
-    since been implemented (specs/002-ci-gate-workflow), so this now
-    targets `notes`, a group still stubbed as of this feature."""
-    result = runner.invoke(app, ["notes", "write"])
+    `gate` was this feature's original example, then `notes`
+    (specs/002-ci-gate-workflow, specs/007-change-note-capture); both are
+    now implemented, so this targets `tests`, a group still stubbed as of
+    this feature."""
+    result = runner.invoke(app, ["tests", "inventory"])
     assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
     assert result.exit_code not in {int(c) for c in ExitCode}
 

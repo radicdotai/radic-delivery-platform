@@ -27,6 +27,10 @@ from radic_delivery.descriptor.validator import validate as validate_descriptor
 from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
 from radic_delivery.gate.evaluator import evaluate as evaluate_gate
 from radic_delivery.gate.result import GateResult
+from radic_delivery.notes.builder import build_record
+from radic_delivery.notes.check import classify as classify_pr_body
+from radic_delivery.notes.result import build_check_result
+from radic_delivery.notes.writer import write as write_change_note
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
 from radic_delivery.release_commands.authorization import authorize as authorize_command
@@ -391,6 +395,119 @@ for _subcommand_name in _RELEASE_NOT_IMPLEMENTED:
     )(_make_release_stub(_subcommand_name))
 
 
+# --- notes ---------------------------------------------------------------
+
+notes_app = typer.Typer(help="Capture change-note records and check release-note completeness.")
+app.add_typer(notes_app, name="notes")
+
+
+@notes_app.command("write")
+def notes_write(
+    repo: str = typer.Option(..., "--repo", help="e.g. radicdotai/web-bff."),
+    sha: str = typer.Option(..., "--sha", help="40-character commit SHA."),
+    pr: int | None = typer.Option(None, "--pr", help="Pull request number."),
+    bucket: str | None = typer.Option(
+        None,
+        "--bucket",
+        help="Accepted for contract compatibility; the real GCS upload is not implemented yet.",
+    ),
+    type_: str = typer.Option(
+        ..., "--type", help="feature|fix|improvement|chore|security|docs|internal."
+    ),
+    audience: str = typer.Option(..., "--audience", help="customer|internal|none."),
+    title: str = typer.Option(..., "--title"),
+    summary: str = typer.Option(..., "--summary"),
+    jira_key: str = typer.Option(
+        ..., "--jira-key", help="A Jira key (e.g. RAD-1234), or the literal 'None'."
+    ),
+    linked_prs: str | None = typer.Option(
+        None, "--linked-prs", help="Comma-separated cross-repo refs, e.g. radicdotai/frontend-v2#456."
+    ),
+    migration: bool = typer.Option(False, "--migration/--no-migration"),
+    uat_escape: bool = typer.Option(False, "--uat-escape/--no-uat-escape"),
+    regression_test_added: bool = typer.Option(False, "--regression-test-added/--no-regression-test-added"),
+    author: str | None = typer.Option(None, "--author"),
+    merged_at: str | None = typer.Option(None, "--merged-at", help="ISO 8601 date-time."),
+    out_dir: Path = typer.Option(Path("."), "--out-dir", help="Local root to write the record under."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Build, validate, and write one change-note record (FR-001 through FR-004).
+
+    Never fetches a pull request's details from GitHub itself — every
+    field is explicit input (FR-010). The real GCS upload is not
+    implemented; `upload_status` always reports `not_available`.
+    """
+    build_result = build_record(
+        repo=repo,
+        sha=sha,
+        pr_number=pr,
+        type=type_,
+        audience=audience,
+        title=title,
+        summary=summary,
+        jira_key=jira_key,
+        linked_prs=[item.strip() for item in linked_prs.split(",") if item.strip()] if linked_prs else None,
+        migration=migration,
+        uat_escape=uat_escape,
+        regression_test_added=regression_test_added,
+        author=author,
+        merged_at=merged_at,
+    )
+
+    if not build_result.ok:
+        _emit(
+            format,
+            build_result.to_dict(),
+            [f"INVALID: {len(build_result.issues)} issue(s) found."]
+            + [f"  [{issue.path}] {issue.message}" for issue in build_result.issues],
+        )
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    assert build_result.record is not None
+    write_result = write_change_note(build_result.record, repo=repo, sha=sha, out_dir=out_dir)
+    payload = {**build_result.to_dict(), **write_result.to_dict()}
+    _emit(
+        format,
+        payload,
+        [
+            "OK: change-note record written.",
+            f"  local_path: {write_result.local_path}",
+            f"  upload_status: {write_result.upload_status}",
+        ],
+    )
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+@notes_app.command("check")
+def notes_check(
+    pr_body_file: Path = typer.Option(
+        ..., "--pr-body-file", help="Path to a file containing the raw pull request body text."
+    ),
+    require_jira_key: bool = typer.Option(
+        False, "--require-jira-key", help="Block (exit 3) on an incomplete body instead of only warning."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Classify a PR body's Jira-reference completeness (FR-006 through FR-009).
+
+    The PR body is read from a file, never a raw CLI text argument, since
+    it is attacker-influenced free text (FR-005).
+    """
+    classification, jira_key = classify_pr_body(pr_body_file.read_text())
+    result = build_check_result(classification, jira_key, blocking=require_jira_key)
+
+    payload = result.to_dict()
+    text_lines = [f"Release-note check: {result.classification}"]
+    if result.jira_key is not None:
+        text_lines.append(f"  jira_key: {result.jira_key}")
+    if result.detail:
+        text_lines.append(f"  detail: {result.detail}")
+    text_lines.append(f"  passed: {result.passed}")
+    _emit(format, payload, text_lines)
+
+    raise typer.Exit(code=int(ExitCode.OK if result.passed else ExitCode.POLICY_FAILURE))
+
+
 # --- policy ------------------------------------------------------------
 
 policy_app = typer.Typer(help="Inspect the policy/exceptions.yml ledger.")
@@ -425,7 +542,7 @@ def exceptions_check(
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["notes", "tests", "records", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["tests", "records", "rollback", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:
