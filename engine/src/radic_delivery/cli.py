@@ -339,7 +339,9 @@ def release_command(
     comment_file: Path | None = typer.Option(
         None, "--comment-file", help="Path to a file containing the raw PR comment text. Omit to read stdin."
     ),
-    author: str = typer.Option(..., "--author", help="GitHub username of the comment's author."),
+    actor: str = typer.Option(
+        ..., "--actor", help="GitHub username of the comment's author (Confluence Reference 3's flag name)."
+    ),
     release_managers: str = typer.Option(
         ..., "--release-managers", help="Comma-separated GitHub usernames on the release-managers team."
     ),
@@ -356,7 +358,7 @@ def release_command(
     release_manager_list = [name.strip() for name in release_managers.split(",") if name.strip()]
 
     parsed = parse_command(comment_body)
-    result = authorize_command(parsed, author, release_manager_list, tech_lead)
+    result = authorize_command(parsed, actor, release_manager_list, tech_lead)
     _emit_command_check_result(format, result)
 
     if result.classification in ("not_a_command", "accepted"):
