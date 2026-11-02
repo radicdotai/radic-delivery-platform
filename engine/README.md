@@ -5,15 +5,15 @@ validating this platform's service descriptors and policy exceptions, for
 evaluating a service's CI quality gate, for scanning a service for security
 findings, for linting a service's Cloud Deploy manifests, for parsing
 and authorizing release-PR slash commands, for capturing change-note
-records and checking release-note completeness, and for selecting a
-release's ready tickets into a draft manifest. See
-`specs/001-engine-scaffold/`, `specs/002-ci-gate-workflow/`,
-`specs/003-security-scanning/`, `specs/004-deploy-yaml-lint/`,
-`specs/005-release-command-parser/`,
+records and checking release-note completeness, for selecting a
+release's ready tickets into a draft manifest, and for cutting the real
+release branch from it. See `specs/001-engine-scaffold/`,
+`specs/002-ci-gate-workflow/`, `specs/003-security-scanning/`,
+`specs/004-deploy-yaml-lint/`, `specs/005-release-command-parser/`,
 `specs/006-release-commands-workflow/`,
-`specs/007-change-note-capture/`, and
-`specs/008-release-propose/` for the full specification, plan, and
-design rationale behind this package.
+`specs/007-change-note-capture/`, `specs/008-release-propose/`, and
+`specs/009-release-cut/` for the full specification, plan, and design
+rationale behind this package.
 
 ## Command surface
 
@@ -37,25 +37,27 @@ radic-delivery notes check --pr-body-file <...>           # implemented (warns, 
 radic-delivery release propose <...>                      # implemented (reads local change-notes/, real git
                                                            # reachability; readiness/dev-green are explicit input,
                                                            # never a live Jira/test-results call — see below)
+radic-delivery release cut <...>                          # implemented (real git branch + cherry-pick -x,
+                                                           # chronological order, clean conflict rollback)
 
 radic-delivery policy rulesets-diff                       # not implemented yet (no stub registered — not yet
                                                            # discoverable via --help at all)
 radic-delivery tests inventory                            # not implemented yet
-radic-delivery release cut|verify-promotion|finalise      # not implemented yet
+radic-delivery release verify-promotion|finalise          # not implemented yet
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
 radic-delivery records put-test-result                    # not implemented yet
 radic-delivery rollback plan                              # not implemented yet
 radic-delivery migrations check                           # not implemented yet
 ```
 
-9 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
-and Commands, §6) specifies are implemented; 14 remain. Four of those
-nine have a narrower option surface than Reference 3 describes (noted
-above) — each gap was a deliberate scope decision recorded in that
-feature's own `research.md`/spec Assumptions, not an oversight, but none
-has been revisited since. `security scan` exists outside Reference 3's
-own CLI table entirely (built from Reference 2's workflow contract in
-specs/003) and isn't a stand-in for anything that table lists.
+10 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
+and Commands, §6) specifies are implemented; 13 remain. Four of those ten
+have a narrower option surface than Reference 3 describes (noted above)
+— each gap was a deliberate scope decision recorded in that feature's own
+`research.md`/spec Assumptions, not an oversight, but none has been
+revisited since. `security scan` exists outside Reference 3's own CLI
+table entirely (built from Reference 2's workflow contract in specs/003)
+and isn't a stand-in for anything that table lists.
 
 Of this platform's 12 reusable GitHub Actions workflows (Reference 2:
 Workflow Contracts), 3 are built — `ci`, `security`, `release-commands`
@@ -111,10 +113,9 @@ Tech Lead identity are explicit inputs — this command never looks them up
 itself, same as `gate evaluate` doesn't install a service's own toolchain.
 The comment body is read only from `--comment-file` or stdin, never from a
 CLI text argument, so a calling workflow is never tempted to interpolate an
-untrusted PR comment body into a shell command. Every other `release`
-subcommand except `propose` (`cut`, `verify-promotion`, `finalise`)
-remains unimplemented. See `specs/005-release-command-parser/
-data-model.md` for the full `CommandCheckResult` shape.
+untrusted PR comment body into a shell command. `release verify-
+promotion`/`finalise` remain unimplemented. See `specs/005-release-
+command-parser/data-model.md` for the full `CommandCheckResult` shape.
 
 `release command`'s JSON output also carries three additive fields —
 `workflow_command` (`remove`/`add`/`nonjira`/`abort`/`waive`/`none`),
@@ -175,6 +176,28 @@ manifest shape and `research.md` D1 for the schema corrections this
 feature made (the architecture's own release-manifest schema, as
 written, could not validate any manifest a fresh proposal could actually
 produce).
+
+`release cut` reads an existing draft (`status: "proposed"`) manifest,
+refuses to proceed if `--release-id`/`--hotfix` don't match it or its
+status isn't `"proposed"`, re-verifies every selected commit still has a
+local change-note record, then — for real, against a real local git
+checkout — creates `release/<release-id>` from the fixed production line
+(`main`, never a caller-suppliable ref) and cherry-picks (`git cherry-pick
+-x`) every selected commit onto it in the commits' own chronological
+order (never an arbitrary or caller-specified order). Any cherry-pick
+conflict aborts the whole operation — the attempted branch is removed and
+the repository is restored to exactly where it was, the manifest is left
+unchanged, and the specific failing commit is named. On success, the
+manifest is updated in place: `release_branch`, `release_head`, each
+commit's `release_sha`/`cherry_pick_x`, and `status: "cut"`. `--dry-run`
+validates and resolves everything (including the pending commit order)
+without creating a branch or changing the manifest — though it cannot
+guarantee a conflict-free real cut, since detecting a conflict means
+actually attempting the cherry-pick. This is the first feature with no
+external-dependency boundary at all: every behaviour, including the
+conflict-abort path, is exercised against a real local git repository.
+See `specs/009-release-cut/research.md` for the exact rollback steps and
+exit-code mapping.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't
