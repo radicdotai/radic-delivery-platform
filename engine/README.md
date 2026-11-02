@@ -13,8 +13,9 @@ release branch from it, and for capturing test-result records. See
 `specs/005-release-command-parser/`,
 `specs/006-release-commands-workflow/`,
 `specs/007-change-note-capture/`, `specs/008-release-propose/`,
-`specs/009-release-cut/`, and `specs/010-test-result-capture/` for the
-full specification, plan, and design rationale behind this package.
+`specs/009-release-cut/`, `specs/010-test-result-capture/`, and
+`specs/011-release-pipeline-completion/` for the full specification,
+plan, and design rationale behind this package.
 
 ## Command surface
 
@@ -42,19 +43,24 @@ radic-delivery release cut <...>                          # implemented (real gi
                                                            # chronological order, clean conflict rollback)
 radic-delivery records put-test-result <...>              # implemented (validates the zero-skip-budget and
                                                            # stage-completeness rules; stores locally)
+radic-delivery release verify-promotion <...>              # implemented (real ancestry/tree/tag checks against
+                                                           # a release manifest; Cloud-Deploy-digest fact always
+                                                           # "not_available" — --expected-tag is new, flagged)
+radic-delivery release finalise <...>                      # implemented (real fast-forward + semver tag; refuses
+                                                           # on any status/digest/fast-forward mismatch)
+radic-delivery rollback plan <...>                         # implemented (pure computation; fully explicit input,
+                                                           # no auto-lookup of "the previous release")
 
 radic-delivery policy rulesets-diff                       # not implemented yet (no stub registered — not yet
                                                            # discoverable via --help at all)
 radic-delivery tests inventory                            # not implemented yet
-radic-delivery release verify-promotion|finalise          # not implemented yet
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
-radic-delivery rollback plan                              # not implemented yet
 radic-delivery migrations check                           # not implemented yet
 ```
 
-11 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
-and Commands, §6) specifies are implemented; 12 remain. Four of those
-eleven have a narrower option surface than Reference 3 describes (noted
+14 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
+and Commands, §6) specifies are implemented; 9 remain. Four of those
+fourteen have a narrower option surface than Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
 has been revisited since. `security scan` exists outside Reference 3's
@@ -115,8 +121,7 @@ Tech Lead identity are explicit inputs — this command never looks them up
 itself, same as `gate evaluate` doesn't install a service's own toolchain.
 The comment body is read only from `--comment-file` or stdin, never from a
 CLI text argument, so a calling workflow is never tempted to interpolate an
-untrusted PR comment body into a shell command. `release verify-
-promotion`/`finalise` remain unimplemented. See `specs/005-release-
+untrusted PR comment body into a shell command. See `specs/005-release-
 command-parser/data-model.md` for the full `CommandCheckResult` shape.
 
 `release command`'s JSON output also carries three additive fields —
@@ -219,6 +224,41 @@ match exactly. The real `radicdotai/delivery-records` upload is not
 implemented; the result always reports `upload_status: "not_available"`.
 See `specs/010-test-result-capture/data-model.md` for the full record
 shape and `research.md` D1 for the schema corrections this feature made.
+
+`release verify-promotion` reads a release manifest and independently
+reports three real, local git facts, never combined into a single
+pass/fail: **ancestry** (`--release-head` is a genuine descendant of the
+manifest's `base.sha`), **tree** (every manifest commit pair's trees are
+identical, confirming no tampering after the cut), and **tag** (a real
+git tag named `--expected-tag` — a new, flagged input, since Reference
+3's CLI table doesn't name one — exists and points at `--release-head`).
+`release_digest_equals_stage_digest` is always reported `not_available`;
+the live Cloud Deploy call it needs is out of scope, and `--image`/
+`--digest`/`--cd-release` are accepted only for that comparison's
+contract compatibility. See `specs/011-release-pipeline-completion/
+research.md` D1/D2 for the full reasoning behind the tag check's design.
+
+`release finalise` refuses unless the manifest's `status` is
+`"prod-deployed"` and (when already recorded) `digests.prod` matches
+`--prod-digest` exactly, then — only after both its own
+`git merge-base --is-ancestor` pre-check and `git merge --ff-only`'s own
+independent refusal agree a clean fast-forward is possible — moves the
+real local `main` to the release head, creates a real
+`v<major>.<minor>.<patch>` tag (auto-bumping the highest existing tag's
+patch component by default; `--tag`/`--bump` override this), and updates
+the manifest to `status: "finalised"` with `main.fast_forwarded_to`/
+`main.at`/`main.tag` populated. A second finalisation of the same
+manifest is always refused, naming its actual status; nothing is ever
+partially applied. See `specs/011-release-pipeline-completion/
+research.md` D3.
+
+`rollback plan` is a pure computation over fully explicit input
+(`--env`, `--current-release`/`--current-digest`, `--target-release`/
+`--target-digest`, optional `--estimated-minutes`/
+`--migrations-reverted`) — no git, no file I/O, always exits `0`.
+Resolving "the previous release" or "the current release" automatically
+is out of scope; identical current and target releases still produce a
+plan, marked `no_op: true` rather than an error.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

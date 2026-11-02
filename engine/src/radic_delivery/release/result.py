@@ -14,6 +14,14 @@ CutReason = Literal[
     "git_error",
 ]
 
+FinaliseReason = Literal[
+    "release_id_mismatch",
+    "status_mismatch",
+    "digest_mismatch",
+    "not_fast_forward",
+    "git_error",
+]
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -109,4 +117,45 @@ class CutResult:
             "detail": self.detail,
             "failed_sha": self.failed_sha,
             "dry_run": self.dry_run,
+        }
+
+
+@dataclass(frozen=True)
+class PromotionVerification:
+    ancestry_verified: bool
+    tree_verified: bool
+    tag_verified: bool
+    release_digest_equals_stage_digest: Literal["not_available"] = "not_available"
+    detail: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.ancestry_verified and self.tree_verified and self.tag_verified
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "ancestry_verified": self.ancestry_verified,
+            "tree_verified": self.tree_verified,
+            "tag_verified": self.tag_verified,
+            "release_digest_equals_stage_digest": self.release_digest_equals_stage_digest,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class FinaliseResult:
+    ok: bool
+    manifest: dict[str, Any]
+    reason: FinaliseReason | None = None
+    detail: str = ""
+    tag: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "manifest": self.manifest,
+            "reason": self.reason,
+            "detail": self.detail,
+            "tag": self.tag,
         }

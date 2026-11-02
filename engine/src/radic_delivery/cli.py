@@ -37,13 +37,16 @@ from radic_delivery.records.validator import validate as validate_test_result
 from radic_delivery.records.writer import write as write_test_result
 from radic_delivery.release.candidates import load_candidates
 from radic_delivery.release.cut import cut as cut_release
+from radic_delivery.release.finalise import finalise as finalise_release
 from radic_delivery.release.git_history import GitHistoryError, reachable_shas, resolve_ref
 from radic_delivery.release.manifest import build_manifest
 from radic_delivery.release.selector import select as select_release_candidates
+from radic_delivery.release.verify_promotion import verify_promotion
 from radic_delivery.release_commands.authorization import authorize as authorize_command
 from radic_delivery.release_commands.grammar import parse as parse_command
 from radic_delivery.release_commands.result import CommandCheckResult
 from radic_delivery.release_commands.workflow_outcome import map_outcome
+from radic_delivery.rollback.planner import plan as plan_rollback
 from radic_delivery.security.aggregator import scan as scan_security
 from radic_delivery.security.result import SecurityScanResult
 
@@ -551,27 +554,102 @@ def release_cut(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
-_RELEASE_NOT_IMPLEMENTED = ["verify-promotion", "finalise"]
+@release_app.command("verify-promotion")
+def release_verify_promotion(
+    manifest_path: Path = typer.Option(..., "--manifest", help="Path to the release's own manifest."),
+    repo_dir: Path = typer.Option(Path("."), "--repo-dir", help="Local git checkout to verify against."),
+    release_head: str = typer.Option(..., "--release-head", help="The commit SHA about to be promoted."),
+    expected_tag: str = typer.Option(
+        ..., "--expected-tag", help="The git tag expected to exist and point at --release-head."
+    ),
+    image: str | None = typer.Option(
+        None, "--image", help="Accepted for --cd-release's digest comparison; inert otherwise."
+    ),
+    digest: str | None = typer.Option(
+        None, "--digest", help="Accepted for --cd-release's digest comparison; inert otherwise."
+    ),
+    cd_release: str | None = typer.Option(
+        None,
+        "--cd-release",
+        help="Accepted for contract compatibility; the live digest check is not implemented yet.",
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Independently verify ancestry, tree, and tag before a promotion
+    (FR-001, FR-002). `release_digest_equals_stage_digest` is always
+    `not_available` — the live Cloud Deploy call it needs is out of scope.
+    """
+    manifest = json.loads(manifest_path.read_text())
 
-
-def _make_release_stub(subcommand_name: str) -> Any:
-    def _stub(ctx: typer.Context) -> None:
-        typer.echo(
-            f"'release {subcommand_name}' is a planned subcommand (see the approved architecture) "
-            "that is not implemented yet by this feature.",
-            err=True,
+    try:
+        result = verify_promotion(
+            manifest,
+            repo_dir=repo_dir,
+            release_head=release_head,
+            expected_tag=expected_tag,
+            cd_release=cd_release,
         )
-        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
+    except GitHistoryError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
 
-    return _stub
+    text_lines = [f"Promotion verification: {'OK' if result.ok else 'FAILED'}"]
+    text_lines.append(f"  ancestry_verified: {result.ancestry_verified}")
+    text_lines.append(f"  tree_verified: {result.tree_verified}")
+    text_lines.append(f"  tag_verified: {result.tag_verified}")
+    text_lines.append(
+        f"  release_digest_equals_stage_digest: {result.release_digest_equals_stage_digest}"
+    )
+    for item in result.detail:
+        text_lines.append(f"  - {item}")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK if result.ok else ExitCode.POLICY_FAILURE))
 
 
-for _subcommand_name in _RELEASE_NOT_IMPLEMENTED:
-    release_app.command(
-        name=_subcommand_name,
-        help=f"(not implemented yet) release {_subcommand_name}.",
-        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    )(_make_release_stub(_subcommand_name))
+@release_app.command("finalise")
+def release_finalise(
+    manifest_path: Path = typer.Option(..., "--manifest", help="Path to the prod-deployed manifest."),
+    release_id: str = typer.Option(..., "--release-id"),
+    prod_digest: str = typer.Option(..., "--prod-digest"),
+    repo_dir: Path = typer.Option(Path("."), "--repo-dir", help="Local git checkout to finalise."),
+    tag: str | None = typer.Option(None, "--tag", help="Override the auto-computed semver tag."),
+    bump: str = typer.Option("patch", "--bump", help="major|minor|patch — ignored when --tag is given."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Fast-forward `main` (bot only — see spec Assumptions), tag it, and
+    finalise the manifest, after prod success (FR-003 through FR-005).
+
+    Never forces a non-fast-forward move, and never finalises the same
+    release twice.
+    """
+    manifest = json.loads(manifest_path.read_text())
+
+    result = finalise_release(
+        manifest,
+        repo_dir=repo_dir,
+        release_id=release_id,
+        prod_digest=prod_digest,
+        tag=tag,
+        bump=bump,
+    )
+
+    if not result.ok:
+        text_lines = [f"FAILED: {result.reason}", f"  detail: {result.detail}"]
+        _emit(format, result.to_dict(), text_lines)
+        if result.reason in ("not_fast_forward", "git_error"):
+            raise typer.Exit(code=int(ExitCode.INFRA_ERROR))
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    manifest_path.write_text(json.dumps(result.manifest, indent=2))
+
+    text_lines = [
+        "OK: release finalised.",
+        f"  tag: {result.tag}",
+        f"  main.fast_forwarded_to: {result.manifest['main']['fast_forwarded_to']}",
+    ]
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
 
 
 # --- notes ---------------------------------------------------------------
@@ -778,11 +856,58 @@ def records_put_test_result(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
+# --- rollback ---------------------------------------------------------------
+
+rollback_app = typer.Typer(help="Compute (but never perform) a rollback plan.")
+app.add_typer(rollback_app, name="rollback")
+
+
+@rollback_app.command("plan")
+def rollback_plan(
+    env: str = typer.Option(..., "--env"),
+    current_release: str = typer.Option(..., "--current-release"),
+    current_digest: str = typer.Option(..., "--current-digest"),
+    target_release: str = typer.Option(..., "--target-release"),
+    target_digest: str = typer.Option(..., "--target-digest"),
+    estimated_minutes: int = typer.Option(5, "--estimated-minutes"),
+    migrations_reverted: bool = typer.Option(
+        False, "--migrations-reverted/--no-migrations-reverted"
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Compute a rollback plan from fully explicit input (FR-006, FR-007).
+
+    Performs no action at all — resolving "the previous release" or "the
+    current release" automatically is out of scope (spec Assumptions).
+    """
+    result = plan_rollback(
+        environment=env,
+        current_release=current_release,
+        current_digest=current_digest,
+        target_release=target_release,
+        target_digest=target_digest,
+        estimated_minutes=estimated_minutes,
+        migrations_reverted=migrations_reverted,
+    )
+
+    text_lines = [
+        f"Rollback plan for '{result.environment}':",
+        f"  current: {result.current_release} ({result.current_digest})",
+        f"  target: {result.target_release} ({result.target_digest})",
+        f"  estimated_minutes: {result.estimated_minutes}",
+        f"  migrations_reverted: {result.migrations_reverted}",
+    ]
+    if result.no_op:
+        text_lines.append("  no_op: true — current and target releases are identical.")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
 # --- not-yet-implemented command groups ------------------------------------
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["tests", "rollback", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["tests", "migrations"]
 
 
 def _make_stub(group_name: str) -> Any:

@@ -135,3 +135,84 @@ def delete_branch(repo_dir: Path, branch_name: str) -> None:
         )
     except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
         raise GitHistoryError(f"could not delete branch '{branch_name}' in {repo_dir}: {exc}") from exc
+
+
+def tree_sha(repo_dir: Path, commit: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", f"{commit}^{{tree}}"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not resolve tree for commit '{commit}' in {repo_dir}: {exc}") from exc
+    return result.stdout.strip()
+
+
+def is_ancestor(repo_dir: Path, ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    raise GitHistoryError(
+        f"could not check ancestry of '{ancestor}' -> '{descendant}' in {repo_dir}: "
+        f"{result.stdout + result.stderr}"
+    )
+
+
+def tag_exists_at(repo_dir: Path, tag: str, commit: str) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+    tag_commit = subprocess.run(
+        ["git", "rev-list", "-n", "1", tag],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return tag_commit == resolve_ref(repo_dir, commit)
+
+
+def list_version_tags(repo_dir: Path) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "tag", "--list", "v*"], cwd=repo_dir, capture_output=True, text=True, check=True
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not list version tags in {repo_dir}: {exc}") from exc
+    return sorted(line for line in result.stdout.splitlines() if line)
+
+
+def create_tag(repo_dir: Path, tag: str, commit: str) -> None:
+    try:
+        subprocess.run(
+            ["git", "tag", tag, commit], cwd=repo_dir, capture_output=True, text=True, check=True
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not create tag '{tag}' at '{commit}' in {repo_dir}: {exc}") from exc
+
+
+def fast_forward_branch(repo_dir: Path, branch: str, target: str) -> Literal["ok", "not_fast_forward"]:
+    """Checks out `branch` and fast-forward-merges `target` into it.
+    `--ff-only` is git's own independent re-enforcement of the same
+    ancestry guarantee this feature's own pre-check already confirms
+    (research.md D3) — never a forced or three-way merge."""
+    checkout(repo_dir, branch)
+    result = subprocess.run(
+        ["git", "merge", "--ff-only", target], cwd=repo_dir, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        return "ok"
+    return "not_fast_forward"
