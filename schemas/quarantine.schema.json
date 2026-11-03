@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/radicdotai/delivery-platform/schemas/quarantine.schema.json",
+  "title": "Test Quarantine Ledger",
+  "description": "The single file (policy/quarantine.yml) recording every test currently quarantined under the platform's quarantine policy (quality.quarantine.max_days/max_percent_of_tests).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "quarantine"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "quarantine": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service", "test_id", "reason", "jira_key", "quarantined_since"],
+        "properties": {
+          "service": { "type": "string", "minLength": 1 },
+          "test_id": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "jira_key": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$|^TODO-VERIFY$" },
+          "quarantined_since": { "type": "string", "format": "date" }
+        }
+      }
+    }
+  }
+}

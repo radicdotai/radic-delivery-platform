@@ -75,9 +75,11 @@ of any individual feature.
 .github/workflows/     # reusable workflows (workflow_call) + this repo's own CI
 actions/               # composite actions (setup-engine, setup-security-tools, ...)
 engine/                # the radic-delivery CLI (Python, typer) — see engine/README.md
-schemas/               # service/release-manifest/change-note/test-result JSON Schemas
+schemas/               # service/release-manifest/change-note/test-result/quarantine JSON Schemas
 templates/callers/     # thin example caller workflows for service repos
-policy/                # exceptions.yml — the one skip-budget exceptions ledger
+policy/                # exceptions.yml, quarantine.yml — the skip-budget and test-quarantine ledgers
+rulesets/              # committed GitHub ruleset JSON (dev-trunk, main-prod-line, release-branches,
+                       # product-tags, platform-tags) — compared against live state by rulesets-diff
 specs/                 # Spec Kit feature specs: spec.md, plan.md, tasks.md per feature
 .specify/              # Spec Kit tooling + this repo's constitution
 ```

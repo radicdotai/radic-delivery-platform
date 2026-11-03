@@ -31,8 +31,13 @@ from radic_delivery.notes.builder import build_record
 from radic_delivery.notes.check import classify as classify_pr_body
 from radic_delivery.notes.result import build_check_result
 from radic_delivery.notes.writer import write as write_change_note
+from radic_delivery.paths import policy_dir
 from radic_delivery.policy.exceptions import ExceptionsFileError
 from radic_delivery.policy.exceptions import check as check_exception
+from radic_delivery.policy.quarantine import QuarantineFileError
+from radic_delivery.policy.quarantine import load as load_quarantine
+from radic_delivery.policy.rulesets_diff import DuplicateRulesetNameError
+from radic_delivery.policy.rulesets_diff import diff as diff_rulesets
 from radic_delivery.records.validator import validate as validate_test_result
 from radic_delivery.records.writer import write as write_test_result
 from radic_delivery.release.candidates import load_candidates
@@ -49,6 +54,7 @@ from radic_delivery.release_commands.workflow_outcome import map_outcome
 from radic_delivery.rollback.planner import plan as plan_rollback
 from radic_delivery.security.aggregator import scan as scan_security
 from radic_delivery.security.result import SecurityScanResult
+from radic_delivery.tests_inventory.inventory import inventory as inventory_tests
 
 app = typer.Typer(
     name="radic-delivery",
@@ -795,6 +801,51 @@ def exceptions_check(
     raise typer.Exit(code=int(exit_code))
 
 
+@policy_app.command("rulesets-diff")
+def policy_rulesets_diff(
+    repo: str = typer.Option(
+        ..., "--repo", help="e.g. radicdotai/web-bff. Carried through for context only."
+    ),
+    committed_dir: Path = typer.Option(
+        ..., "--dir", help="Local directory of committed ruleset JSON files (e.g. rulesets/)."
+    ),
+    live_file: Path = typer.Option(
+        ...,
+        "--live-file",
+        help="Local JSON file standing in for `gh api repos/<repo>/rulesets`'s real response array.",
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Compare committed ruleset JSON against a supplied live ruleset state (FR-004 through FR-006).
+
+    Always a drift report, never a gate (research.md D5) — no live GitHub
+    call is made or faked; the live state is explicit input.
+    """
+    try:
+        committed = [json.loads(path.read_text()) for path in sorted(committed_dir.glob("*.json"))]
+        live = json.loads(live_file.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+
+    try:
+        result = diff_rulesets(repo, committed, live)
+    except DuplicateRulesetNameError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INVALID: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT)) from exc
+
+    text_lines = [f"Rulesets diff for '{repo}': {'no drift' if result.ok else 'DRIFT DETECTED'}"]
+    text_lines.append(f"  unchanged: {result.unchanged}")
+    text_lines.append(f"  missing_from_live: {result.missing_from_live}")
+    text_lines.append(f"  added_in_live: {result.added_in_live}")
+    for item in result.changed:
+        text_lines.append(f"  changed: {item.name} ({item.detail})")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
 # --- records ---------------------------------------------------------------
 
 records_app = typer.Typer(help="Validate and store test-result records.")
@@ -903,11 +954,77 @@ def rollback_plan(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
+# --- tests -------------------------------------------------------------
+
+tests_app = typer.Typer(help="Count a service's tests per suite, including skipped and quarantined.")
+app.add_typer(tests_app, name="tests")
+
+
+@tests_app.command("inventory")
+def tests_inventory(
+    repo_dir: Path = typer.Option(..., "--repo-dir", help="Local checkout holding .radic/service.yml."),
+    out: Path | None = typer.Option(None, "--out", help="Optional path to also write the JSON result to."),
+    quarantine_file: Path | None = typer.Option(
+        None, "--quarantine-file", help="Quarantine ledger path (default: policy/quarantine.yml)."
+    ),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="ISO date to classify quarantine entries as of (default: today)."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Run a service's own unit-test command for real and report its
+    counts, including skipped and quarantined (FR-001 through FR-003).
+
+    Reports, never gates: always exits OK once the test command actually
+    ran, regardless of the pass/fail/skip/quarantine facts it finds.
+    """
+    descriptor_path = repo_dir / ".radic" / "service.yml"
+    validation = validate_descriptor(descriptor_path)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+    assert validation.document is not None
+
+    as_of_date = date.fromisoformat(as_of) if as_of else date.today()
+    ledger_path = quarantine_file if quarantine_file is not None else policy_dir() / "quarantine.yml"
+    try:
+        quarantine_entries = load_quarantine(ledger_path)
+    except QuarantineFileError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INVALID: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT)) from exc
+
+    result = inventory_tests(
+        validation.document,
+        repo_dir=repo_dir,
+        quarantine_entries=quarantine_entries,
+        as_of=as_of_date,
+    )
+
+    if out is not None:
+        out.write_text(json.dumps(result.to_dict(), indent=2))
+
+    if not result.launched:
+        _emit(format, result.to_dict(), [f"INFRA ERROR: {result.detail}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR))
+
+    text_lines = [
+        f"Test inventory for suite '{result.suite}':",
+        f"  total: {result.total}, passed: {result.passed}, failed: {result.failed}, "
+        f"skipped: {result.skipped}",
+        f"  quarantined_active: {result.quarantined_active}, "
+        f"quarantined_expired: {result.quarantined_expired}",
+        f"  within_quarantine_share_cap: {result.within_quarantine_share_cap}",
+    ]
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
 # --- not-yet-implemented command groups ------------------------------------
 # Declared explicitly so the full intended surface (Reference 3: Schemas,
 # Identity and Commands) is discoverable from --help on day one.
 
-_NOT_IMPLEMENTED_GROUPS = ["tests", "migrations"]
+_NOT_IMPLEMENTED_GROUPS = ["migrations"]
 
 
 def _make_stub(group_name: str) -> Any:

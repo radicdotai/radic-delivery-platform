@@ -43,7 +43,11 @@ def _typecheck_command(descriptor: dict[str, Any]) -> ToolInvocation:
     return ToolInvocation(check_name="typecheck", argv=argv)
 
 
-def _unit_command(descriptor: dict[str, Any]) -> ToolInvocation:
+def unit_command(descriptor: dict[str, Any]) -> ToolInvocation:
+    """Public: the descriptor's unit-test ToolInvocation alone, needed
+    wherever only `quality.unit` is relevant (e.g. `tests inventory`,
+    specs/012) and a full lint+typecheck+unit descriptor shouldn't be
+    required just to run tests."""
     unit = descriptor["quality"]["unit"]
     runner = unit["runner"]
     if runner == "pytest":
@@ -67,5 +71,5 @@ def build_commands(descriptor: dict[str, Any]) -> list[ToolInvocation]:
     return [
         _lint_command(descriptor),
         _typecheck_command(descriptor),
-        _unit_command(descriptor),
+        unit_command(descriptor),
     ]
