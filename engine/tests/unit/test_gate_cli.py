@@ -11,7 +11,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from radic_delivery.cli import app
-from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
+from radic_delivery.exit_codes import ExitCode
 
 SAMPLE_REPOS = Path(__file__).parent.parent / "fixtures" / "sample-repos"
 
@@ -34,7 +34,11 @@ def test_broken_sample_exits_policy_failure() -> None:
     assert result.exit_code == int(ExitCode.POLICY_FAILURE)
 
 
-def test_release_gate_mode_exits_not_implemented() -> None:
+def test_release_gate_mode_without_results_dir_fails_cleanly() -> None:
+    """release-gate is now fully implemented (specs/013-quality-gate-
+    completion); without --results-dir/--digest, the new stage_regression
+    check reports itself not_executable rather than the gate silently
+    passing or the whole command reporting not-implemented."""
     result = runner.invoke(
         app,
         [
@@ -44,9 +48,14 @@ def test_release_gate_mode_exits_not_implemented() -> None:
             _descriptor("python-sample"),
             "--mode",
             "release-gate",
+            "--format",
+            "json",
         ],
     )
-    assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
+    assert result.exit_code == int(ExitCode.POLICY_FAILURE)
+    payload = json.loads(result.stdout)
+    stage_check = next(c for c in payload["checks"] if c["name"] == "stage_regression")
+    assert stage_check["status"] == "not_executable"
 
 
 def test_json_and_text_formats_report_the_same_overall_result() -> None:

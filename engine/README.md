@@ -14,9 +14,10 @@ release branch from it, and for capturing test-result records. See
 `specs/006-release-commands-workflow/`,
 `specs/007-change-note-capture/`, `specs/008-release-propose/`,
 `specs/009-release-cut/`, `specs/010-test-result-capture/`,
-`specs/011-release-pipeline-completion/`, and
-`specs/012-ci-tooling-completion/` for the full specification, plan, and
-design rationale behind this package.
+`specs/011-release-pipeline-completion/`,
+`specs/012-ci-tooling-completion/`, and
+`specs/013-quality-gate-completion/` for the full specification, plan,
+and design rationale behind this package.
 
 ## Command surface
 
@@ -28,7 +29,9 @@ radic-delivery policy exceptions check <id>              # implemented (signatur
 radic-delivery gate evaluate --mode ci-gate <...>         # implemented (executes tools directly; Reference 3
                                                            # describes computing from pre-existing job results —
                                                            # --results-dir not yet supported)
-radic-delivery gate evaluate --mode release-gate <...>    # not implemented yet (reports as such)
+radic-delivery gate evaluate --mode release-gate <...>    # implemented (reuses ci-gate's real checks unchanged,
+                                                           # plus a new stage_regression check against a local
+                                                           # test-result record — --results-dir/--digest are new)
 radic-delivery security scan --scope source|iac|all <...> # implemented (report-only — never blocks; not in
                                                            # Reference 3's own CLI table, built from Reference 2's
                                                            # workflow contract instead)
@@ -58,13 +61,21 @@ radic-delivery policy rulesets-diff <...>                  # implemented (local 
                                                            # comparison; --live-file is new, flagged — no live
                                                            # `gh api` call is made, gh is unauthenticated here)
 
+radic-delivery migrations check <...>                      # implemented (migrations_frozen, a faithful local
+                                                           # port of check_migrations_frozen.py; migration_graph,
+                                                           # a new Alembic-chain soundness check; alembic_check/
+                                                           # schema_check accepted but always "not_available" —
+                                                           # both need a live database connection)
+
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
-radic-delivery migrations check                           # not implemented yet
 ```
 
-16 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
-and Commands, §6) specifies are implemented; 7 remain. Four of those
-sixteen have a narrower option surface than Reference 3 describes (noted
+18 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
+and Commands, §6) specifies are implemented; 5 remain — only the six
+GCP-calling `deploy` subcommands above are still unimplemented, and every
+other command group this platform's architecture names is now fully
+real. Four of those eighteen have a narrower option surface than
+Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
 has been revisited since. `security scan` exists outside Reference 3's
@@ -220,9 +231,11 @@ mirroring the real `releases/<id>/test-results/<environment>-<repo>-
 under a fixed `dev` segment instead). Two rules are enforced at the
 schema level, never silently bypassed: a record reporting one or more
 skipped tests can never claim an overall pass (this platform's zero-skip-
-budget principle, expressed for a record a future release-gate feature
-will read), and a stage-environment record must carry a real release
-identifier and declare itself as the full test scope. When both
+budget principle, expressed for a record `gate evaluate --mode
+release-gate`'s own `stage_regression` check now reads — see
+`specs/013-quality-gate-completion`), and a stage-environment record must
+carry a real release identifier and declare itself as the full test
+scope. When both
 `--release-id` and the record's own `release_id` are present, they must
 match exactly. The real `radicdotai/delivery-records` upload is not
 implemented; the result always reports `upload_status: "not_available"`.
@@ -300,6 +313,34 @@ matching Reference 2's own "drift report" framing. It does not itself
 know which of the five rulesets are expected to apply to which specific
 `--repo` — that judgment is left to whoever reads the report. See
 `specs/012-ci-tooling-completion/research.md` D4-D6.
+
+`gate evaluate --mode release-gate` reuses `ci-gate`'s own real lint/
+typecheck/unit/coverage/skip-budget checks unchanged (the same function,
+the same code path — no duplicated logic), then adds one further,
+distinctly named check, `stage_regression`: a local test-result record
+(specs/010's own output tree) must exist under `--results-dir` for the
+exact `--digest` being evaluated, be scoped as a full regression, and
+pass cleanly with zero skipped tests. A record for a different digest is
+treated exactly as if no record exists at all. The live Cloud-Deploy-
+rollout-succeeded fact stays `promote`'s own concern, not
+`release-gate`'s — Reference 2 lists them as separate checklist items.
+See `specs/013-quality-gate-completion/research.md` D1-D2.
+
+`migrations check` runs `migrations_frozen` (a faithful local port of
+`check_migrations_frozen.py`: for every workflow file the descriptor
+names in `migrations.frozen_check_workflow_files`, confirms it still
+exists and still contains a job named `migrations.job_name`, naming
+specifically which file is missing or altered) and `migration_graph` (a
+new check that every Alembic-style migration file under
+`--migrations-dir` forms one single, linear `revision`/`down_revision`
+chain, naming any fork or cycle found and which files are involved) for
+real. `alembic_check` and `schema_check` are accepted as valid `--checks`
+values but always reported `not_available` — both fundamentally need a
+live database connection this platform cannot make here, and this
+feature never approximates them with a file-based look-alike that
+wouldn't actually test the same thing. A service with
+`migrations.enabled: false` reports this plainly rather than attempting
+any check. See `specs/013-quality-gate-completion/research.md` D3.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

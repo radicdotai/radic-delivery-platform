@@ -7,6 +7,7 @@ and never lets `run_mutation: true` affect the overall result by itself.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -144,6 +145,61 @@ def _check_skip_budget(
     )
 
 
+def _check_stage_regression(results_dir: Path | None, digest: str | None) -> CheckResult:
+    """release-gate only: a local stage test-result record (specs/010's
+    own output tree) must exist for the exact digest being evaluated, be
+    scoped as a full regression, and pass cleanly (research.md D2)."""
+    if results_dir is None or digest is None:
+        return CheckResult(
+            name="stage_regression",
+            status="not_executable",
+            detail="release-gate requires --results-dir and --digest to evaluate the stage regression.",
+        )
+
+    record: dict[str, Any] | None = None
+    for path in sorted(results_dir.rglob("*.json")):
+        try:
+            candidate = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if candidate.get("environment") == "stage" and candidate.get("digest") == digest:
+            record = candidate
+            break
+
+    if record is None:
+        return CheckResult(
+            name="stage_regression",
+            status="fail",
+            detail=f"no stage test-result record found for digest {digest}.",
+        )
+
+    if record.get("scope") != "full":
+        return CheckResult(
+            name="stage_regression",
+            status="fail",
+            detail=f"stage record for digest {digest} is not scoped as a full regression.",
+        )
+    if record.get("result") != "pass":
+        return CheckResult(
+            name="stage_regression",
+            status="fail",
+            detail=f"stage record for digest {digest} did not pass (result: {record.get('result')}).",
+        )
+    skipped = record.get("counts", {}).get("skipped", 0)
+    if skipped:
+        return CheckResult(
+            name="stage_regression",
+            status="fail",
+            detail=f"stage record for digest {digest} has {skipped} skipped test(s).",
+        )
+
+    return CheckResult(
+        name="stage_regression",
+        status="pass",
+        detail=f"stage record for digest {digest} is a full, clean pass.",
+    )
+
+
 def evaluate(
     descriptor: dict[str, Any],
     mode: Mode,
@@ -152,11 +208,10 @@ def evaluate(
     run_fn: RunFn = runner_module.run,
     exception_checker: ExceptionCheckerFn = default_skip_exception_checker,
     as_of: date | None = None,
+    results_dir: Path | None = None,
+    digest: str | None = None,
 ) -> GateResult:
     del run_mutation  # accepted per FR-012; mutation.status is always "not_implemented" below
-
-    if mode == "release-gate":
-        return GateResult(mode=mode, overall="not_implemented", checks=[])
 
     invocations = {inv.check_name: inv for inv in build_commands(descriptor)}
 
@@ -219,6 +274,9 @@ def evaluate(
         checks.append(
             _check_skip_budget(test_run.skipped, descriptor["service"]["name"], exception_checker, as_of)
         )
+
+    if mode == "release-gate":
+        checks.append(_check_stage_regression(results_dir, digest))
 
     return GateResult(
         mode=mode,

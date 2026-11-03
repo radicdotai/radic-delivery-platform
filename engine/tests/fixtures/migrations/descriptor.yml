@@ -1,0 +1,108 @@
+schema_version: 1
+service:
+  name: fastapi-backend
+  kind: api
+  owner: platform-maintainers
+repo:
+  slug: radicdotai/fastapi-backend
+  trunk: dev
+runtime:
+  template: python-uv
+  version: "3.11"
+  package_manager: uv
+  services: [redis, postgres, postgrest]
+build:
+  dockerfile: Dockerfile
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: radic-backend
+    name: backend
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: fastapi-backend-dev
+    health:
+      url: https://fastapi-backend-dev.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: backend/dev
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: fastapi-backend-stage
+    health:
+      url: https://fastapi-backend-stage.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: backend/stage
+  prod:
+    gcp_project: radicai-production
+    region: us-central1
+    cloud_run_service: fastapi-backend
+    health:
+      url: https://fastapi-backend.example.run.app/health
+      timeout_seconds: 60
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state
+      prefix: backend/prod
+migrations:
+  enabled: true
+  tool: alembic
+  job_name: "Run Database Migrations"
+  checks: [migrations_frozen, migration_graph, alembic_check, schema_check]
+  frozen_check_workflow_files: [tests/fixtures/migrations/deploy-dev-intact.yml]
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai-production
+  deployables:
+    - name: backend
+      kind: service
+      pipelines:
+        dev: fastapi-backend-dev
+        rel: fastapi-backend-rel
+      service_yaml:
+        dev: deploy/run/dev.yaml
+        stage: deploy/run/stage.yaml
+        prod: deploy/run/prod.yaml
+      health:
+        path: /health
+        mode: http
+      require_approval:
+        prod: true
+      parity:
+        allow: [secret_count]
+quality:
+  lint:
+    tool: ruff
+  typecheck:
+    tool: mypy
+    blocking: true
+  unit:
+    runner: pytest
+  coverage_floor:
+    global: 86
+  skip_budget: 0
+  post_deploy:
+    suites:
+      - name: api-regression-deployed
+        runner: pytest
+        target: "e2e and not slow"
+        environments: [dev, stage]
+      - name: smoke
+        runner: pytest
+        target: smoke
+        environments: [dev, stage]
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD
