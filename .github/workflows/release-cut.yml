@@ -1,0 +1,419 @@
+name: release-cut
+
+# Reference 2: Workflow Contracts, §3.4. Orchestrates the propose-then-cut
+# sequence Technical Design §8 lays out in strict order: propose a draft
+# release PR (step 4), wait for a second person's approval (step 5),
+# only then cherry-pick onto the real release branch (step 6). All real
+# decision logic — ticket/commit selection, the dev-green gate, the
+# actual cherry-pick, the PR body's own rendering — lives in the pinned
+# engine (`radic-delivery release propose`/`release cut`/
+# `release render-pr-body`, specs/008-release-propose/
+# 009-release-cut/014-release-cut-workflow); this workflow only
+# sequences and gates those calls, matching the same discipline
+# `ci.yml`/`security.yml`/`release-commands.yml` already follow.
+#
+# research.md D1 (specs/014-release-cut-workflow): the `cut` job's
+# `pull_request_review` trigger is a flagged convention, not something
+# Reference 2's own caller-template example shows directly — supported
+# by Reference 3's bot-identity page (subscribed events include
+# `pull_request_review`; its permissions table says "read approvals")
+# and by Technical Design §8's own strict propose-then-cut ordering.
+#
+# research.md D4: the release manifest's real home is the
+# `radicdotai/delivery-records` GitHub repo (read/written directly with
+# the bot's own App token), never a live GCS/WIF call — only change-note
+# records are GCS-backed, and fetching those for real remains out of
+# scope (specs/007's own Assumptions already deferred that upload path);
+# `release render-pr-body` degrades gracefully to "(unknown)" titles/
+# types when nothing is found locally, so this costs nothing beyond
+# thinner rendering until a real sync exists.
+#
+# research.md D5: the release PR's head is a small, disposable
+# `release-proposal/<id>` branch (one empty commit from `base`), entirely
+# decoupled from `release/<id>` itself — `release cut` (already built)
+# creates that branch itself and refuses if it already exists, and never
+# pushes anything (pushing is this workflow's own job, same "engine does
+# real work, workflow does real-world side effects" split as everywhere
+# else in this platform).
+#
+# research.md D3: resolving dev-green-failed commits automatically from
+# a live test-results store is explicitly out of scope; `dev_green_failed`
+# is a manual input instead, the same "accept it, don't fake it"
+# treatment every other live-call boundary in this platform already gets.
+
+on:
+  workflow_call:
+    inputs:
+      descriptor:
+        description: "Path to the service descriptor."
+        type: string
+        default: .radic/service.yml
+      base:
+        description: "dev, or main for a hotfix."
+        type: string
+        default: dev
+      tickets:
+        description: "Comma-separated ticket keys considered ready for this release; empty = resolve via Jira JQL."
+        type: string
+        default: ""
+      non_jira_prs:
+        description: "Comma-separated PR numbers of merged PRs with no Jira key to include; empty = none."
+        type: string
+        default: ""
+      dev_green_failed:
+        description: "Comma-separated commit SHAs known to have failed the dev regression check (research.md D3 — explicit input, not resolved live)."
+        type: string
+        default: ""
+      dry_run:
+        description: "Propose only, create nothing real."
+        type: boolean
+        default: false
+      hotfix:
+        description: "Cut a hotfix from main instead of a normal release from dev."
+        type: boolean
+        default: false
+      release_id:
+        description: "Required for hotfix; optional for a normal cut (reuses the id of the first repo of the same release when empty)."
+        type: string
+        default: ""
+      initiator:
+        description: "The person who requested this release."
+        type: string
+    outputs:
+      release_id:
+        value: ${{ jobs.propose.outputs.release_id || jobs.cut.outputs.release_id }}
+      release_branch:
+        value: ${{ jobs.cut.outputs.release_branch }}
+      pr_number:
+        value: ${{ jobs.propose.outputs.pr_number }}
+      selection_count:
+        value: ${{ jobs.propose.outputs.selection_count }}
+      held_back:
+        value: ${{ jobs.propose.outputs.held_back }}
+      non_jira_prs:
+        value: ${{ jobs.propose.outputs.non_jira_prs }}
+      manifest_path:
+        value: ${{ jobs.propose.outputs.manifest_path || jobs.cut.outputs.manifest_path }}
+    secrets:
+      DELIVERY_BOT_APP_ID:
+        required: true
+      DELIVERY_BOT_PRIVATE_KEY:
+        required: true
+      ATLASSIAN_URL:
+        required: true
+      ATLASSIAN_EMAIL:
+        required: true
+      ATLASSIAN_API_TOKEN:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  propose:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.propose.outputs.release_id }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      selection_count: ${{ steps.propose.outputs.selection_count }}
+      held_back: ${{ steps.propose.outputs.held_back }}
+      non_jira_prs: ${{ steps.propose.outputs.non_jira_prs }}
+      manifest_path: ${{ steps.propose.outputs.manifest_path }}
+    steps:
+      - name: Checkout calling service repo
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          fetch-depth: 0  # release propose needs full dev/main history to compute reachability
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push` of the release-proposal branch; this workflow never runs an artifact-upload
+          # step, so the risk artipacked warns about (credentials leaking via an uploaded artifact)
+          # does not apply here
+
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Mint the release bot's GitHub App installation token
+        id: app_token
+        uses: actions/create-github-app-token@v1  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          app-id: ${{ secrets.DELIVERY_BOT_APP_ID }}
+          private-key: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout delivery-records (research.md D4)
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          repository: radicdotai/delivery-records
+          token: ${{ steps.app_token.outputs.token }}
+          path: delivery-records
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push` of the proposed manifest commit; this workflow never runs an artifact-upload
+          # step, so the risk artipacked warns about does not apply here
+
+      - name: Resolve ticket readiness via Jira (research.md D3)
+        id: jira
+        if: inputs.tickets == ''
+        env:
+          ATLASSIAN_URL: ${{ secrets.ATLASSIAN_URL }}
+          ATLASSIAN_EMAIL: ${{ secrets.ATLASSIAN_EMAIL }}
+          ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+          REPO_YAML: ${{ inputs.descriptor }}
+        run: |
+          set -euo pipefail
+          jira_project=$(yq -r '.release.jira_project' "$REPO_YAML")
+          jql="project = ${jira_project} AND status = \"Ready for Review\""
+          response=$(curl -sf -u "${ATLASSIAN_EMAIL}:${ATLASSIAN_API_TOKEN}" \
+            -G "${ATLASSIAN_URL}/rest/api/3/search" --data-urlencode "jql=${jql}")
+          echo "tickets=$(echo "$response" | jq -r '[.issues[].key] | join(",")')" >> "$GITHUB_OUTPUT"
+
+      - name: Run release propose
+        id: propose
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          REPO_SLUG: ${{ github.repository }}
+          TICKETS: ${{ inputs.tickets != '' && inputs.tickets || steps.jira.outputs.tickets }}
+          BASE: ${{ inputs.base }}
+          NON_JIRA_PRS: ${{ inputs.non_jira_prs }}
+          DEV_GREEN_FAILED: ${{ inputs.dev_green_failed }}
+          RELEASE_ID_INPUT: ${{ inputs.release_id }}
+          KIND: ${{ inputs.hotfix && 'hotfix' || 'release' }}
+          INITIATOR: ${{ inputs.initiator }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          uv run --project "$ENGINE_PROJECT" radic-delivery release propose \
+            --repo "$REPO_SLUG" --base "$BASE" \
+            --tickets "$TICKETS" --non-jira-prs "$NON_JIRA_PRS" \
+            --dev-green-failed "$DEV_GREEN_FAILED" \
+            --release-id "$RELEASE_ID_INPUT" \
+            --kind "$KIND" \
+            --initiator "$INITIATOR" \
+            --dry-run="$DRY_RUN" \
+            --format json > propose-result.json
+          cat propose-result.json
+
+          release_id=$(jq -r '.manifest.release_id' propose-result.json)
+          manifest_path="delivery-records/releases/${release_id}.yaml"
+          {
+            echo "release_id=$release_id"
+            echo "selection_count=$(jq -r '.manifest.selection.tickets | length' propose-result.json)"
+            echo "held_back=$(jq -c '.manifest.selection.held_back' propose-result.json)"
+            echo "non_jira_prs=$(jq -c '.manifest.selection.non_jira_prs // []' propose-result.json)"
+            echo "manifest_path=$manifest_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit the proposed manifest to delivery-records
+        if: inputs.dry_run == false
+        env:
+          RELEASE_ID: ${{ steps.propose.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p delivery-records/releases
+          jq '.manifest' propose-result.json > "delivery-records/releases/${RELEASE_ID}.yaml"
+          cd delivery-records
+          git config user.name "delivery-bot"
+          git config user.email "delivery-bot@users.noreply.github.com"
+          git add "releases/${RELEASE_ID}.yaml"
+          git commit -q -m "Propose release ${RELEASE_ID} (${{ github.repository }})" --allow-empty
+          git push origin HEAD
+
+      - name: Create the disposable proposal branch (research.md D5)
+        if: inputs.dry_run == false
+        env:
+          RELEASE_ID: ${{ steps.propose.outputs.release_id }}
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch="release-proposal/${RELEASE_ID}"
+          if ! git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            git config user.name "delivery-bot"
+            git config user.email "delivery-bot@users.noreply.github.com"
+            git checkout -b "$branch"
+            git commit -q -m "Release proposal ${RELEASE_ID}" --allow-empty
+            git push origin "$branch"
+          fi
+
+      - name: Render the release PR body
+        id: render
+        if: inputs.dry_run == false
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          RELEASE_ID: ${{ steps.propose.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          jq '.manifest' propose-result.json > manifest.json
+          uv run --project "$ENGINE_PROJECT" radic-delivery release render-pr-body \
+            --manifest manifest.json --change-notes-dir . --repo-dir . \
+            --out pr-body.md --format json > /dev/null
+
+      - name: Open or update the release PR
+        id: pr
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_ID: ${{ steps.propose.outputs.release_id }}
+          BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          branch="release-proposal/${RELEASE_ID}"
+          existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body-file pr-body.md
+            echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
+          else
+            number=$(gh pr create --base "$BASE" --head "$branch" \
+              --title "Release ${RELEASE_ID}" --body-file pr-body.md | grep -o '[0-9]*$')
+            echo "pr_number=$number" >> "$GITHUB_OUTPUT"
+          fi
+
+  cut:
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.identify.outputs.release_id }}
+      release_branch: ${{ steps.cut.outputs.release_branch }}
+      manifest_path: ${{ steps.identify.outputs.manifest_path }}
+    steps:
+      - name: Identify the release this review is for
+        id: identify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          head_ref=$(gh pr view "$PR_NUMBER" --json headRefName --jq '.headRefName')
+          if [[ "$head_ref" != release-proposal/* ]]; then
+            echo "not_release_pr=true" >> "$GITHUB_OUTPUT"
+            echo "This PR is not a recognised release proposal (head: $head_ref) — ignoring."
+            exit 0
+          fi
+          release_id="${head_ref#release-proposal/}"
+          {
+            echo "not_release_pr=false"
+            echo "release_id=$release_id"
+            echo "manifest_path=delivery-records/releases/${release_id}.yaml"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refuse unless this is a genuine, independent approval
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          INITIATOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          if [ "$REVIEW_STATE" != "approved" ]; then
+            echo "::notice::Review state is '$REVIEW_STATE', not 'approved' — no cut."
+            exit 0
+          fi
+          if [ "$REVIEWER" = "$INITIATOR" ]; then
+            echo "::error::The approving reviewer ($REVIEWER) is the release's own initiator — refusing to cut (FR-006)."
+            exit 1
+          fi
+
+      - name: Checkout calling service repo
+        if: steps.identify.outputs.not_release_pr == 'false'
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          fetch-depth: 0
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push` of the real release branch; this workflow never runs an artifact-upload
+          # step, so the risk artipacked warns about does not apply here
+
+      - name: Setup the pinned engine
+        id: engine
+        if: steps.identify.outputs.not_release_pr == 'false'
+        uses: ./actions/setup-engine
+
+      - name: Mint the release bot's GitHub App installation token
+        id: app_token
+        if: steps.identify.outputs.not_release_pr == 'false'
+        uses: actions/create-github-app-token@v1  # zizmor: ignore[unpinned-uses] see propose job above
+        with:
+          app-id: ${{ secrets.DELIVERY_BOT_APP_ID }}
+          private-key: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout delivery-records (research.md D4)
+        if: steps.identify.outputs.not_release_pr == 'false'
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          repository: radicdotai/delivery-records
+          token: ${{ steps.app_token.outputs.token }}
+          path: delivery-records
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push` of the cut manifest commit; this workflow never runs an artifact-upload
+          # step, so the risk artipacked warns about does not apply here
+
+      - name: Refuse the cut unless the non-Jira-PR gate is satisfied (FR-007)
+        id: gate
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          RELEASE_ID: ${{ steps.identify.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          cp "delivery-records/releases/${RELEASE_ID}.yaml" manifest.json
+          uv run --project "$ENGINE_PROJECT" radic-delivery release render-pr-body \
+            --manifest manifest.json --change-notes-dir . --repo-dir . --format json > render.json
+          if grep -q '\[ \] Every non-Jira PR' <(jq -r '.body' render.json); then
+            echo "::error::Not every non-Jira PR has a reason and a second approver — refusing to cut (FR-007)."
+            exit 1
+          fi
+
+      - name: Run release cut
+        id: cut
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          RELEASE_ID: ${{ steps.identify.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          uv run --project "$ENGINE_PROJECT" radic-delivery release cut \
+            --manifest manifest.json --release-id "$RELEASE_ID" \
+            --change-notes-dir . --format json > cut-result.json
+          cat cut-result.json
+          echo "release_branch=$(jq -r '.manifest.release_branch' cut-result.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Push the real release branch (the engine itself never pushes)
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_BRANCH: ${{ steps.cut.outputs.release_branch }}
+        run: git push origin "$RELEASE_BRANCH"
+
+      - name: Commit the cut manifest back to delivery-records
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          RELEASE_ID: ${{ steps.identify.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          jq '.manifest' cut-result.json > "delivery-records/releases/${RELEASE_ID}.yaml"
+          cd delivery-records
+          git config user.name "delivery-bot"
+          git config user.email "delivery-bot@users.noreply.github.com"
+          git add "releases/${RELEASE_ID}.yaml"
+          git commit -q -m "Cut release ${RELEASE_ID} (${{ github.repository }})"
+          git push origin HEAD
+
+      - name: Update the release PR body to reflect the cut
+        if: steps.identify.outputs.not_release_pr == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          RELEASE_ID: ${{ steps.identify.outputs.release_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          jq '.manifest' cut-result.json > manifest.json
+          uv run --project "$ENGINE_PROJECT" radic-delivery release render-pr-body \
+            --manifest manifest.json --change-notes-dir . --repo-dir . --out pr-body.md --format json > /dev/null
+          gh pr edit "$PR_NUMBER" --body-file pr-body.md

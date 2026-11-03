@@ -15,9 +15,10 @@ release branch from it, and for capturing test-result records. See
 `specs/007-change-note-capture/`, `specs/008-release-propose/`,
 `specs/009-release-cut/`, `specs/010-test-result-capture/`,
 `specs/011-release-pipeline-completion/`,
-`specs/012-ci-tooling-completion/`, and
-`specs/013-quality-gate-completion/` for the full specification, plan,
-and design rationale behind this package.
+`specs/012-ci-tooling-completion/`,
+`specs/013-quality-gate-completion/`, and
+`specs/014-release-cut-workflow/` for the full specification, plan, and
+design rationale behind this package.
 
 ## Command surface
 
@@ -54,6 +55,9 @@ radic-delivery release finalise <...>                      # implemented (real f
                                                            # on any status/digest/fast-forward mismatch)
 radic-delivery rollback plan <...>                         # implemented (pure computation; fully explicit input,
                                                            # no auto-lookup of "the previous release")
+radic-delivery release render-pr-body <...>                # implemented (deterministic PR-body rendering from a
+                                                           # manifest + change-notes + real git; not in Reference
+                                                           # 3's own CLI table — built to back release-cut.yml)
 radic-delivery tests inventory <...>                       # implemented (real descriptor-driven unit-test run,
                                                            # reusing gate evaluate's own command/parser machinery;
                                                            # quarantine counting is a new, flagged ledger convention)
@@ -78,13 +82,15 @@ real. Four of those eighteen have a narrower option surface than
 Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
-has been revisited since. `security scan` exists outside Reference 3's
-own CLI table entirely (built from Reference 2's workflow contract in
-specs/003) and isn't a stand-in for anything that table lists.
+has been revisited since. `security scan` and `release render-pr-body`
+both exist outside Reference 3's own CLI table entirely (`security scan`
+built from Reference 2's workflow contract in specs/003; `render-pr-body`
+built in specs/014 to back `release-cut.yml`'s own PR-body rendering)
+and aren't a stand-in for anything that table lists.
 
 Of this platform's 12 reusable GitHub Actions workflows (Reference 2:
-Workflow Contracts), 3 are built — `ci`, `security`, `release-commands`
-(`.github/workflows/`) — and 9 remain: `build`, `release-cut`, `deploy`,
+Workflow Contracts), 4 are built — `ci`, `security`, `release-commands`,
+`release-cut` (`.github/workflows/`) — and 8 remain: `build`, `deploy`,
 `promote`, `hotfix-backport`, `rollback`, `research-deploy`, `cleanup`,
 `infra`.
 
@@ -341,6 +347,40 @@ feature never approximates them with a file-based look-alike that
 wouldn't actually test the same thing. A service with
 `migrations.enabled: false` reports this plainly rather than attempting
 any check. See `specs/013-quality-gate-completion/research.md` D3.
+
+`release render-pr-body` deterministically renders the real release PR
+body — Reference 3's own template, every section — from an already-
+produced release manifest, specs/007's change-note records (looked up
+per ticket/non-Jira-PR for `title`/`type`; a missing record degrades
+gracefully to `(unknown)` rather than failing), and a real git diff for
+the deploy-files-changed section. Per-ticket dev-green is always `pass`
+by construction — `release propose` already excludes dev-green-failed
+commits from selection before a manifest exists, so nothing in the
+manifest's selection could ever have failed it. The one field genuinely
+unavailable anywhere real (a service's migration-chain membership) is a
+small, optional, explicit `--migrations-chain` input — the same
+"accept it, don't fake it" treatment every other such gap in this
+platform gets. Rendering the same manifest twice always produces
+byte-identical output. See `specs/014-release-cut-workflow/research.md`
+D2.
+
+`.github/workflows/release-cut.yml` is this platform's fourth reusable
+workflow (after `ci`/`security`/`release-commands`) — a `propose` job
+(manual dispatch: resolves ticket readiness via a real Jira JQL query,
+calls `release propose` + `release render-pr-body`, opens or updates the
+release PR against a disposable `release-proposal/<id>` head branch) and
+a `cut` job (triggered by an approving `pull_request_review` — a flagged
+convention, since Reference 2's own caller-template example shows no
+trigger for the post-approval cherry-pick at all; supported by Reference
+3's bot-identity page and Technical Design's own strict propose-then-cut
+ordering). The cut job refuses outright — never calling `release cut` —
+unless the approving reviewer isn't the release's own initiator and the
+non-Jira-PR gate is satisfied. This sandbox has no GitHub Actions
+runner, live Jira, or live GCP access to execute it against; it is
+validated statically instead (`actionlint`/`zizmor`, both zero findings
+— verified directly, a stricter bar than `ci.yml` itself actually
+achieves today). See `specs/014-release-cut-workflow/research.md` D1,
+D3-D5.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

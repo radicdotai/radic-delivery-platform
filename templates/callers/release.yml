@@ -6,16 +6,42 @@
 #
 # Principle I (centralise implementation, decentralise configuration): all
 # real logic — the six-form grammar, the authorization rule, the
-# command/outcome mapping — lives in delivery-platform's `release_commands`
-# engine package and its reusable `release-commands` workflow, pinned to an
-# exact tag. This caller only decides WHEN to invoke it: a new comment,
-# and only when that comment is on a pull request (specs/006 spec FR-002,
-# SC-004) — a comment on a plain issue must never reach the `commands` job
-# at all, which is exactly what the `if:` condition below guarantees.
+# command/outcome mapping, the release propose/cut sequencing, the PR
+# body's own rendering — lives in delivery-platform's engine and its
+# reusable `release-commands`/`release-cut` workflows, both pinned to an
+# exact tag. This caller only decides WHEN to invoke each one.
+#
+# specs/014-release-cut-workflow added the `cut` and `cut_approved` jobs
+# below — deliberately deferred by specs/006 (this file originally wired
+# only the `commands` job). research.md D1 (specs/014): `cut_approved`'s
+# `pull_request_review` trigger is a flagged convention — Reference 2's
+# own caller-template example shows no trigger for the post-approval
+# cherry-pick at all; supported by Reference 3's bot-identity page
+# (subscribed events include `pull_request_review`) and Technical
+# Design §8's own strict propose-then-cut ordering.
 
 name: release
 
 on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base branch"
+        default: dev
+        required: false
+      tickets:
+        description: "Optional comma-separated Jira keys; empty = bot proposal"
+        required: false
+      non_jira_prs:
+        description: "Optional comma-separated PR numbers of merged PRs with no Jira key (each needs a reason and a second approver); empty = none"
+        required: false
+      dry_run:
+        description: "Propose only, create nothing"
+        type: boolean
+        default: false
+      release_id:
+        description: "Optional: reuse the id of the first repo of the same release; empty = generated"
+        required: false
   # zizmor: ignore[dangerous-triggers] no checkout of PR/issue code ever
   # happens anywhere in this trigger's path — the triggering comment's body
   # is only ever read via the GitHub API into a file and passed to the
@@ -23,21 +49,67 @@ on:
   # (research.md D1/D5, continuing specs/005's D4 discipline).
   issue_comment:
     types: [created]
-
-permissions:
-  issues: write
-  pull-requests: write
-  contents: write
+  # research.md D1 (specs/014-release-cut-workflow): the signal that a
+  # second person approved the release PR — never acted on for a review
+  # from the release's own initiator (release-cut.yml's own `cut` job
+  # refuses that case outright; FR-006).
+  pull_request_review:
+    types: [submitted]
 
 jobs:
   commands:
-    if: github.event.issue.pull_request
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
     uses: radicdotai/delivery-platform/.github/workflows/release-commands.yml@v1.0.0  # zizmor: ignore[unpinned-uses] exact-tag pinning is this platform's deliberate convention (CLAUDE.md Principle I: "Pipeline logic lives only here, exact-tag pinned")
     with:
       descriptor: .radic/service.yml
       issue_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
       actor: ${{ github.event.comment.user.login }}
+    secrets:
+      DELIVERY_BOT_APP_ID: ${{ secrets.DELIVERY_BOT_APP_ID }}
+      DELIVERY_BOT_PRIVATE_KEY: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+      ATLASSIAN_URL: ${{ secrets.ATLASSIAN_URL }}
+      ATLASSIAN_EMAIL: ${{ secrets.ATLASSIAN_EMAIL }}
+      ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+
+  cut:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: radicdotai/delivery-platform/.github/workflows/release-cut.yml@v1.0.0  # zizmor: ignore[unpinned-uses] exact-tag pinning is this platform's deliberate convention (CLAUDE.md Principle I: "Pipeline logic lives only here, exact-tag pinned")
+    with:
+      descriptor: .radic/service.yml
+      base: ${{ inputs.base }}
+      tickets: ${{ inputs.tickets }}
+      non_jira_prs: ${{ inputs.non_jira_prs }}
+      dry_run: ${{ inputs.dry_run }}
+      release_id: ${{ inputs.release_id }}
+      initiator: ${{ github.actor }}
+    secrets:
+      DELIVERY_BOT_APP_ID: ${{ secrets.DELIVERY_BOT_APP_ID }}
+      DELIVERY_BOT_PRIVATE_KEY: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+      ATLASSIAN_URL: ${{ secrets.ATLASSIAN_URL }}
+      ATLASSIAN_EMAIL: ${{ secrets.ATLASSIAN_EMAIL }}
+      ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+
+  cut_approved:
+    if: github.event_name == 'pull_request_review'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: radicdotai/delivery-platform/.github/workflows/release-cut.yml@v1.0.0  # zizmor: ignore[unpinned-uses] exact-tag pinning is this platform's deliberate convention (CLAUDE.md Principle I: "Pipeline logic lives only here, exact-tag pinned")
+    with:
+      descriptor: .radic/service.yml
+      initiator: ${{ github.event.pull_request.user.login }}
     secrets:
       DELIVERY_BOT_APP_ID: ${{ secrets.DELIVERY_BOT_APP_ID }}
       DELIVERY_BOT_PRIVATE_KEY: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
