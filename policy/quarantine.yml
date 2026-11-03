@@ -1,0 +1,10 @@
+# The single ledger of tests currently quarantined under the platform's
+# quarantine policy (quality.quarantine.max_days = 7, max_percent_of_tests
+# = 2, both fixed constants — see schemas/service.schema.json).
+# Validated against schemas/quarantine.schema.json.
+#
+# Entries are trusted as given: `radic-delivery tests inventory` does not
+# cross-check a `test_id` against a real test run's own output — see
+# specs/012-ci-tooling-completion/research.md D2.
+schema_version: 1
+quarantine: []

@@ -1,0 +1,15 @@
+{
+  "name": "main-prod-line",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "bypass_actors": [
+    { "actor_type": "Integration", "actor_id": 0, "bypass_mode": "always" }
+  ],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "update" },
+    { "type": "required_linear_history" }
+  ]
+}

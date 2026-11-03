@@ -13,9 +13,10 @@ release branch from it, and for capturing test-result records. See
 `specs/005-release-command-parser/`,
 `specs/006-release-commands-workflow/`,
 `specs/007-change-note-capture/`, `specs/008-release-propose/`,
-`specs/009-release-cut/`, `specs/010-test-result-capture/`, and
-`specs/011-release-pipeline-completion/` for the full specification,
-plan, and design rationale behind this package.
+`specs/009-release-cut/`, `specs/010-test-result-capture/`,
+`specs/011-release-pipeline-completion/`, and
+`specs/012-ci-tooling-completion/` for the full specification, plan, and
+design rationale behind this package.
 
 ## Command surface
 
@@ -50,17 +51,20 @@ radic-delivery release finalise <...>                      # implemented (real f
                                                            # on any status/digest/fast-forward mismatch)
 radic-delivery rollback plan <...>                         # implemented (pure computation; fully explicit input,
                                                            # no auto-lookup of "the previous release")
+radic-delivery tests inventory <...>                       # implemented (real descriptor-driven unit-test run,
+                                                           # reusing gate evaluate's own command/parser machinery;
+                                                           # quarantine counting is a new, flagged ledger convention)
+radic-delivery policy rulesets-diff <...>                  # implemented (local committed-vs-supplied-live JSON
+                                                           # comparison; --live-file is new, flagged — no live
+                                                           # `gh api` call is made, gh is unauthenticated here)
 
-radic-delivery policy rulesets-diff                       # not implemented yet (no stub registered — not yet
-                                                           # discoverable via --help at all)
-radic-delivery tests inventory                            # not implemented yet
 radic-delivery deploy release|promote|approve|rollback|status|drift   # not implemented yet (calls real Cloud Deploy)
 radic-delivery migrations check                           # not implemented yet
 ```
 
-14 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
-and Commands, §6) specifies are implemented; 9 remain. Four of those
-fourteen have a narrower option surface than Reference 3 describes (noted
+16 of the 23 commands Confluence RAITSDA Reference 3 (Schemas, Identity
+and Commands, §6) specifies are implemented; 7 remain. Four of those
+sixteen have a narrower option surface than Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
 has been revisited since. `security scan` exists outside Reference 3's
@@ -259,6 +263,43 @@ research.md` D3.
 Resolving "the previous release" or "the current release" automatically
 is out of scope; identical current and target releases still produce a
 plan, marked `no_op: true` rather than an error.
+
+`tests inventory` runs a service's own descriptor-declared unit-test
+command for real — reusing `gate evaluate`'s own command-construction and
+output-parsing machinery directly (`gate/commands.py::unit_command()`,
+made public by this feature; `gate/parsers.py::parse_test_run()`) rather
+than duplicating it, as a genuinely separate process execution — and
+reports `total`/`passed`/`failed`/`skipped`, plus a lookup against a new,
+flagged ledger (`policy/quarantine.yml`, validated against
+`schemas/quarantine.schema.json`, seeded empty) splitting that service's
+currently-quarantined tests into `quarantined_active` (within the fixed
+7-day window) and `quarantined_expired` (past it). It never cross-checks
+a ledger entry's `test_id` against the real run's own output — the ledger
+is trusted as given, the same discipline `policy/exceptions.yml` already
+gets. A launch failure (the test tool couldn't even run) is reported
+distinctly (`launched: false`, every count `null`), never as an all-zero
+successful run. This command reports; it never gates — it always exits
+`0` once the test command actually ran, regardless of what it found. See
+`specs/012-ci-tooling-completion/research.md` D1-D3.
+
+`policy rulesets-diff` compares a locally committed set of GitHub ruleset
+JSON files (`--dir`, e.g. this repo's own new `rulesets/` directory,
+seeded with the five real rulesets Reference 2 §5 specifies) against a
+supplied stand-in for the live `gh api repos/<repo>/rulesets` response
+(`--live-file`, new and flagged — this sandbox's `gh` is installed but
+not authenticated, so no live call is made or faked). Matching is by each
+ruleset's own `name`; only the five meaningful fields
+(`target`/`enforcement`/`conditions`/`bypass_actors`/`rules`) are
+compared, so GitHub-assigned housekeeping fields a committed file never
+has (`id`, `node_id`, `created_at`, etc.) never cause a false "changed"
+report. Every ruleset name present in either side is reported as exactly
+one of unchanged, missing from live, an unexpected live addition, or
+changed (naming what differs) — never combined. It is a drift report, not
+a gate: it always exits `0` once both inputs are read, drift or not,
+matching Reference 2's own "drift report" framing. It does not itself
+know which of the five rulesets are expected to apply to which specific
+`--repo` — that judgment is left to whoever reads the report. See
+`specs/012-ci-tooling-completion/research.md` D4-D6.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

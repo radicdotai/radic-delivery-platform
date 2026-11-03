@@ -61,10 +61,11 @@ def test_not_implemented_command_group_has_distinct_exit_code() -> None:
     not a crash, and not confused with the four real exit codes.
 
     `gate` was this feature's original example, then `notes`
-    (specs/002-ci-gate-workflow, specs/007-change-note-capture); both are
-    now implemented, so this targets `tests`, a group still stubbed as of
-    this feature."""
-    result = runner.invoke(app, ["tests", "inventory"])
+    (specs/002-ci-gate-workflow, specs/007-change-note-capture), then
+    `tests` (specs/012-ci-tooling-completion); all three are now
+    implemented, so this targets `migrations`, the one group still
+    stubbed as of this feature."""
+    result = runner.invoke(app, ["migrations", "check"])
     assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
     assert result.exit_code not in {int(c) for c in ExitCode}
 
