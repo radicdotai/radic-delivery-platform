@@ -66,9 +66,9 @@ actionlint && zizmor .github/workflows/                  # workflow lint + injec
 - Never overwrite a service repo's existing `CLAUDE.md` wholesale — merge the service-repo template into it.
 
 <!-- SPECKIT START -->
-Active plan: `specs/013-quality-gate-completion/plan.md` (builds on
+Active plan: `specs/014-release-cut-workflow/plan.md` (builds on
 `specs/001-engine-scaffold/plan.md` through
-`specs/012-ci-tooling-completion/plan.md`, all already implemented and
+`specs/013-quality-gate-completion/plan.md`, all already implemented and
 merged). For additional context about technologies to be used, project
 structure, shell commands, and other important information, read the
 current plan.

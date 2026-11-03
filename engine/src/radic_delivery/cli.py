@@ -48,6 +48,7 @@ from radic_delivery.release.cut import cut as cut_release
 from radic_delivery.release.finalise import finalise as finalise_release
 from radic_delivery.release.git_history import GitHistoryError, reachable_shas, resolve_ref
 from radic_delivery.release.manifest import build_manifest
+from radic_delivery.release.render_pr_body import render as render_pr_body
 from radic_delivery.release.selector import select as select_release_candidates
 from radic_delivery.release.verify_promotion import verify_promotion
 from radic_delivery.release_commands.authorization import authorize as authorize_command
@@ -669,6 +670,50 @@ def release_finalise(
         f"  main.fast_forwarded_to: {result.manifest['main']['fast_forwarded_to']}",
     ]
     _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+@release_app.command("render-pr-body")
+def release_render_pr_body(
+    manifest_path: Path = typer.Option(..., "--manifest", help="Path to the release manifest."),
+    change_notes_dir: Path = typer.Option(
+        Path("."), "--change-notes-dir", help="Root of the local change-notes/ tree `notes write` produces."
+    ),
+    repo_dir: Path = typer.Option(
+        Path("."), "--repo-dir", help="Local git checkout, for the deploy-files-changed computation."
+    ),
+    migrations_chain: str | None = typer.Option(
+        None, "--migrations-chain", help="Comma-separated revision ids, in chain order; omit if none."
+    ),
+    out: Path | None = typer.Option(None, "--out", help="Optional path to also write the rendered body to."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Deterministically render the release PR body from a manifest
+    (FR-001 through FR-004). Pure — never calls Jira or GitHub itself."""
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        for required_field in (
+            "release_id", "kind", "status", "repo", "initiator", "base", "selection",
+        ):
+            if required_field not in manifest:
+                raise KeyError(required_field)
+    except (OSError, json.JSONDecodeError, KeyError) as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INVALID: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT)) from exc
+
+    chain = [item.strip() for item in migrations_chain.split(",") if item.strip()] if migrations_chain else []
+    result = render_pr_body(
+        manifest, change_notes_dir=change_notes_dir, repo_dir=repo_dir, migrations_chain=chain
+    )
+
+    if out is not None:
+        out.write_text(result.body)
+
+    if format is OutputFormat.json:
+        _emit(format, result.to_dict(), [])
+    else:
+        typer.echo(result.body)
     raise typer.Exit(code=int(ExitCode.OK))
 
 

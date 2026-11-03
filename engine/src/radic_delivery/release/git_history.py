@@ -204,6 +204,20 @@ def create_tag(repo_dir: Path, tag: str, commit: str) -> None:
         raise GitHistoryError(f"could not create tag '{tag}' at '{commit}' in {repo_dir}: {exc}") from exc
 
 
+def changed_paths(repo_dir: Path, base: str, head: str) -> set[str]:
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", base, head],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not diff '{base}'..'{head}' in {repo_dir}: {exc}") from exc
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def fast_forward_branch(repo_dir: Path, branch: str, target: str) -> Literal["ok", "not_fast_forward"]:
     """Checks out `branch` and fast-forward-merges `target` into it.
     `--ff-only` is git's own independent re-enforcement of the same
