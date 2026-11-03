@@ -62,10 +62,13 @@ def test_not_implemented_command_group_has_distinct_exit_code() -> None:
 
     `gate` was this feature's original example, then `notes`
     (specs/002-ci-gate-workflow, specs/007-change-note-capture), then
-    `tests` (specs/012-ci-tooling-completion); all three are now
-    implemented, so this targets `migrations`, the one group still
-    stubbed as of this feature."""
-    result = runner.invoke(app, ["migrations", "check"])
+    `tests` (specs/012-ci-tooling-completion), then `migrations`
+    (specs/013-quality-gate-completion) — after which no entire top-level
+    command GROUP remains unimplemented; this now targets `deploy
+    promote`, a still-stubbed *subcommand* within the otherwise-real
+    `deploy` group (the six `deploy` subcommands that call real Cloud
+    Deploy are the only genuinely-unimplemented CLI surface left)."""
+    result = runner.invoke(app, ["deploy", "promote"])
     assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
     assert result.exit_code not in {int(c) for c in ExitCode}
 

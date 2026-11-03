@@ -14,7 +14,7 @@ import sys
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import typer
 
@@ -27,6 +27,9 @@ from radic_delivery.descriptor.validator import validate as validate_descriptor
 from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE, ExitCode
 from radic_delivery.gate.evaluator import evaluate as evaluate_gate
 from radic_delivery.gate.result import GateResult
+from radic_delivery.migrations.frozen import check_frozen
+from radic_delivery.migrations.graph import check_graph
+from radic_delivery.migrations.result import MigrationsCheckResult
 from radic_delivery.notes.builder import build_record
 from radic_delivery.notes.check import classify as classify_pr_body
 from radic_delivery.notes.result import build_check_result
@@ -172,6 +175,15 @@ def gate_evaluate(
     run_mutation: bool = typer.Option(
         False, "--run-mutation", help="Request mutation testing (not implemented yet; never fails the gate)."
     ),
+    results_dir: Path | None = typer.Option(
+        None,
+        "--results-dir",
+        help="release-gate only: root to scan for a local stage test-result record "
+        "(specs/010's output tree).",
+    ),
+    digest: str | None = typer.Option(
+        None, "--digest", help="release-gate only: the exact digest being evaluated."
+    ),
     format: OutputFormat = FormatOption,
 ) -> None:
     """Evaluate the quality gate for a service (FR-002 through FR-013)."""
@@ -187,6 +199,8 @@ def gate_evaluate(
         mode=mode.value,
         run_mutation=run_mutation,
         repo_root=repo_root,
+        results_dir=results_dir,
+        digest=digest,
     )
     _emit_gate_result(format, result)
 
@@ -1020,31 +1034,88 @@ def tests_inventory(
     raise typer.Exit(code=int(ExitCode.OK))
 
 
-# --- not-yet-implemented command groups ------------------------------------
-# Declared explicitly so the full intended surface (Reference 3: Schemas,
-# Identity and Commands) is discoverable from --help on day one.
+# --- migrations ----------------------------------------------------------
 
-_NOT_IMPLEMENTED_GROUPS = ["migrations"]
+migrations_app = typer.Typer(help="Check a service's migration safety (frozen safeguard, chain graph).")
+app.add_typer(migrations_app, name="migrations")
 
 
-def _make_stub(group_name: str) -> Any:
-    def _stub(ctx: typer.Context) -> None:
-        typer.echo(
-            f"'{group_name}' is a planned command group (see the approved architecture) "
-            "that is not implemented yet by this feature.",
-            err=True,
+@migrations_app.command("check")
+def migrations_check(
+    descriptor: Path = typer.Option(
+        Path(".radic/service.yml"), "--descriptor", help="Path to the service descriptor."
+    ),
+    repo_dir: Path = typer.Option(
+        Path("."), "--repo-dir", help="Local checkout root frozen_check_workflow_files paths resolve against."
+    ),
+    migrations_dir: Path | None = typer.Option(
+        None,
+        "--migrations-dir",
+        help="Local directory of Alembic-style migration files (for migration_graph).",
+    ),
+    checks: str = typer.Option(
+        "migrations_frozen,migration_graph",
+        "--checks",
+        help="Comma-separated: migrations_frozen, migration_graph, alembic_check, schema_check.",
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Check a service's migration setup for safety (FR-004 through FR-006).
+
+    `alembic_check`/`schema_check` need a live database connection this
+    platform cannot make here; both are always reported `not_available`,
+    never attempted or approximated.
+    """
+    validation = validate_descriptor(descriptor)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+
+    assert validation.document is not None
+    requested = {item.strip() for item in checks.split(",") if item.strip()}
+    enabled = validation.document.get("migrations", {}).get("enabled", False)
+
+    if not enabled:
+        result = MigrationsCheckResult(enabled=False)
+        _emit(format, result.to_dict(), ["Migrations are not enabled for this service."])
+        raise typer.Exit(code=int(ExitCode.OK))
+
+    migrations_frozen_result = (
+        check_frozen(validation.document, repo_dir) if "migrations_frozen" in requested else None
+    )
+    migration_graph_result = (
+        check_graph(migrations_dir) if "migration_graph" in requested and migrations_dir is not None else None
+    )
+    alembic_check_result: Literal["not_available"] | None = (
+        "not_available" if "alembic_check" in requested else None
+    )
+    schema_check_result: Literal["not_available"] | None = (
+        "not_available" if "schema_check" in requested else None
+    )
+
+    result = MigrationsCheckResult(
+        enabled=True,
+        migrations_frozen=migrations_frozen_result,
+        migration_graph=migration_graph_result,
+        alembic_check=alembic_check_result,
+        schema_check=schema_check_result,
+    )
+
+    text_lines = [f"Migrations check: {'OK' if result.ok else 'FAILED'}"]
+    if migrations_frozen_result is not None:
+        for check in migrations_frozen_result.checks:
+            text_lines.append(f"  [{check.status}] {check.file}: {check.detail}")
+    if migration_graph_result is not None:
+        text_lines.append(
+            f"  migration_graph sound: {migration_graph_result.sound} ({migration_graph_result.detail})"
         )
-        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
+    if alembic_check_result is not None:
+        text_lines.append(f"  alembic_check: {alembic_check_result}")
+    if schema_check_result is not None:
+        text_lines.append(f"  schema_check: {schema_check_result}")
+    _emit(format, result.to_dict(), text_lines)
 
-    return _stub
-
-
-for _group_name in _NOT_IMPLEMENTED_GROUPS:
-    app.command(
-        name=_group_name,
-        help=f"(not implemented yet) {_group_name} command group.",
-        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    )(_make_stub(_group_name))
+    raise typer.Exit(code=int(ExitCode.OK if result.ok else ExitCode.POLICY_FAILURE))
 
 
 if __name__ == "__main__":

@@ -81,12 +81,6 @@ def test_missing_tool_is_not_executable_not_fail() -> None:
     assert lint_check.status != "fail"
 
 
-def test_release_gate_mode_is_not_implemented() -> None:
-    result = _run_gate(mode="release-gate")
-    assert result.overall == "not_implemented"
-    assert result.checks == []
-
-
 def test_run_mutation_is_reported_not_implemented_and_does_not_fail_the_gate() -> None:
     result = _run_gate(run_mutation=True)
     assert result.overall == "pass"
