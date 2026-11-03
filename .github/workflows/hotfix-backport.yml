@@ -1,0 +1,147 @@
+name: hotfix-backport
+
+# Reference 2: Workflow Contracts, §3.8. Opens a PR from a succeeded
+# hotfix's already-cut commits into `dev`, after prod success only. All
+# real decision logic — which commits to cherry-pick, the partial-
+# conflict tolerance — lives in the pinned engine
+# (`radic-delivery release backport`, specs/015-hotfix-backport-workflow);
+# this workflow only sequences that call and opens the PR.
+#
+# research.md D1 (specs/015): unlike `release cut`'s all-or-nothing
+# conflict handling, a backport continues past any individually-
+# conflicting commit — Reference 2's own behaviour description
+# ("conflicts open the PR as draft with a conflict note") only makes
+# sense if the PR still gets opened with whatever did land.
+#
+# This job defensively re-checks the triggering `workflow_run`'s own
+# `conclusion`/`head_branch` itself (defense in depth, Principle III),
+# even though the real architecture places that gate on the calling
+# `hotfix.yml` caller template — not yet built in this repo (a
+# `templates/callers/hotfix.yml` caller, naming the real `workflow_run`
+# trigger, is out of scope for this feature; see spec.md Assumptions).
+
+on:
+  workflow_call:
+    inputs:
+      descriptor:
+        description: "Path to the service descriptor."
+        type: string
+        default: .radic/service.yml
+      hotfix_branch:
+        description: "release/<id>-hf — the hotfix release branch that just succeeded in prod."
+        type: string
+      conclusion:
+        description: "The caller's own triggering workflow_run.conclusion, passed through explicitly (defense-in-depth check, research.md D5 — a new, flagged input beyond Reference 2's own hotfix_branch)."
+        type: string
+        default: ""
+    outputs:
+      pr_number:
+        value: ${{ jobs.backport.outputs.pr_number }}
+      picked_commits:
+        value: ${{ jobs.backport.outputs.picked_commits }}
+      conflicts:
+        value: ${{ jobs.backport.outputs.conflicts }}
+    secrets:
+      DELIVERY_BOT_APP_ID:
+        required: true
+      DELIVERY_BOT_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  backport:
+    if: inputs.conclusion == 'success' && endsWith(inputs.hotfix_branch, '-hf')
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      picked_commits: ${{ steps.backport.outputs.picked_commits }}
+      conflicts: ${{ steps.backport.outputs.conflicts }}
+    steps:
+      - name: Checkout calling service repo
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          fetch-depth: 0  # backport needs full history to resolve every hotfix commit's timestamp
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push` of the backport branch; this workflow never runs an artifact-upload step,
+          # so the risk artipacked warns about does not apply here
+
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Mint the release bot's GitHub App installation token
+        id: app_token
+        uses: actions/create-github-app-token@v1  # zizmor: ignore[unpinned-uses] see above
+        with:
+          app-id: ${{ secrets.DELIVERY_BOT_APP_ID }}
+          private-key: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Fetch the hotfix release manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          HOTFIX_BRANCH: ${{ inputs.hotfix_branch }}
+        run: |
+          set -euo pipefail
+          release_id="${HOTFIX_BRANCH#release/}"
+          gh api "repos/radicdotai/delivery-records/contents/releases/${release_id}.yaml" \
+            --jq '.content' | base64 -d > manifest.json
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Run release backport
+        id: backport
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+        run: |
+          set -euo pipefail
+          uv run --project "$ENGINE_PROJECT" radic-delivery release backport \
+            --manifest manifest.json --repo-dir . --into dev \
+            --format json > backport-result.json
+          cat backport-result.json
+
+          {
+            echo "branch=$(jq -r '.branch' backport-result.json)"
+            echo "picked_commits=$(jq -c '.picked_commits' backport-result.json)"
+            echo "conflicted_commits=$(jq -c '.conflicted_commits' backport-result.json)"
+            echo "conflicts=$(jq -r '.conflicts' backport-result.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push the backport branch (the engine itself never pushes)
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          BACKPORT_BRANCH: ${{ steps.backport.outputs.branch }}
+        run: git push origin "$BACKPORT_BRANCH"
+
+      - name: Open the backport PR into dev
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          BACKPORT_BRANCH: ${{ steps.backport.outputs.branch }}
+          CONFLICTS: ${{ steps.backport.outputs.conflicts }}
+          CONFLICTED_COMMITS: ${{ steps.backport.outputs.conflicted_commits }}
+          RELEASE_ID: ${{ steps.manifest.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Backports ${RELEASE_ID}'s already-succeeded hotfix commits into \`dev\`."
+            echo
+            if [ "$CONFLICTS" = "true" ]; then
+              echo "**Some commits conflicted and were not carried back — resolve these by hand:**"
+              echo "$CONFLICTED_COMMITS" | jq -r '.[] | "- `" + . + "`"'
+            fi
+          } > pr-body.md
+
+          draft_flag=""
+          if [ "$CONFLICTS" = "true" ]; then
+            draft_flag="--draft"
+          fi
+          # shellcheck disable=SC2086
+          number=$(gh pr create --base dev --head "$BACKPORT_BRANCH" \
+            --title "Backport ${RELEASE_ID} into dev" --body-file pr-body.md $draft_flag \
+            | grep -o '[0-9]*$')
+          echo "pr_number=$number" >> "$GITHUB_OUTPUT"
