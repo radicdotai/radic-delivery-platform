@@ -1,0 +1,127 @@
+name: cleanup
+
+# Reference 2: Workflow Contracts, §3.11. This feature implements only the
+# `branches` scope (deleting merged, expired release/** branches) — a
+# purely local-git/GitHub-API operation, no GCP call anywhere. The
+# `research` and `images` scopes both require live GCP calls (Cloud Run
+# revision deletion, Artifact Registry image deletion) and are explicitly
+# out of scope for this feature (research.md D1, specs/016).
+#
+# All real decision logic — which branches are merged, which are expired,
+# the unconditional main/dev/checked-out-branch protection — lives in the
+# pinned engine (`radic-delivery cleanup branches`, specs/016). This
+# workflow only sequences that call and pushes each reported deletion to
+# the remote (research.md D5: a local-only delete inside an ephemeral CI
+# runner has no lasting effect).
+
+on:
+  workflow_call:
+    inputs:
+      descriptor:
+        description: "Path to the service descriptor."
+        type: string
+        default: .radic/service.yml
+      scope:
+        description: "research | branches | images | all — only 'branches' is implemented (research.md D1)."
+        type: string
+        default: branches
+      retention_days:
+        description: "Minimum age (days) before a merged branch is deleted (research.md D3 default: 14)."
+        type: number
+        default: 14
+      dry_run:
+        description: "Report only (default) vs. actually delete."
+        type: boolean
+        default: true
+    outputs:
+      deleted_count:
+        value: ${{ jobs.branches.outputs.deleted_count }}
+      kept_count:
+        value: ${{ jobs.branches.outputs.kept_count }}
+      report_uri:
+        value: ${{ jobs.branches.outputs.report_uri }}
+    secrets:
+      DELIVERY_BOT_APP_ID:
+        required: true
+      DELIVERY_BOT_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  branches:
+    if: inputs.scope == 'branches'
+    runs-on: ubuntu-latest
+    outputs:
+      deleted_count: ${{ steps.cleanup.outputs.deleted_count }}
+      kept_count: ${{ steps.cleanup.outputs.kept_count }}
+      report_uri: ${{ steps.upload.outputs.artifact-url }}
+    steps:
+      - name: Refuse any scope other than branches
+        if: inputs.scope != 'branches'
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          echo "::error::cleanup.yml only implements scope 'branches' (research.md D1); got '$SCOPE'." >&2
+          exit 1
+
+      - name: Checkout calling service repo
+        uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          fetch-depth: 0  # cleanup needs full branch history to resolve ancestry and commit age
+          # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
+          # `git push --delete` of expired branches; this workflow never runs an artifact-upload-of-
+          # source step, so the risk artipacked warns about does not apply here
+
+      - name: Setup the pinned engine
+        id: engine
+        uses: ./actions/setup-engine
+
+      - name: Mint the release bot's GitHub App installation token
+        id: app_token
+        uses: actions/create-github-app-token@v1  # zizmor: ignore[unpinned-uses] see above
+        with:
+          app-id: ${{ secrets.DELIVERY_BOT_APP_ID }}
+          private-key: ${{ secrets.DELIVERY_BOT_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Run cleanup branches
+        id: cleanup
+        env:
+          ENGINE_PROJECT: ${{ steps.engine.outputs.engine-project }}
+          RETENTION_DAYS: ${{ inputs.retention_days }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          dry_run_flag="--dry-run"
+          if [ "$DRY_RUN" = "false" ]; then
+            dry_run_flag="--no-dry-run"
+          fi
+          uv run --project "$ENGINE_PROJECT" radic-delivery cleanup branches \
+            --repo-dir . --retention-days "$RETENTION_DAYS" "$dry_run_flag" \
+            --format json > cleanup-result.json
+          cat cleanup-result.json
+
+          {
+            echo "deleted_count=$(jq '.deleted | length' cleanup-result.json)"
+            echo "kept_count=$(jq '.kept | length' cleanup-result.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push each deleted branch's removal to the remote
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          jq -r '.deleted[]' cleanup-result.json | while read -r branch; do
+            git push origin --delete "$branch"
+          done
+
+      - name: Upload the cleanup report
+        id: upload
+        uses: actions/upload-artifact@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
+        with:
+          name: cleanup-branches-report
+          path: cleanup-result.json

@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 import typer
 
+from radic_delivery.cleanup.branches import cleanup_branches
 from radic_delivery.deploy.linter import lint as lint_deploy
 from radic_delivery.deploy.result import DeployLintResult
 from radic_delivery.descriptor.resolver import resolve as resolve_descriptor
@@ -1042,6 +1043,43 @@ def rollback_plan(
     ]
     if result.no_op:
         text_lines.append("  no_op: true — current and target releases are identical.")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+# --- cleanup -----------------------------------------------------------
+
+cleanup_app = typer.Typer(help="Delete expired, merged artifacts (branches scope only).")
+app.add_typer(cleanup_app, name="cleanup")
+
+
+@cleanup_app.command("branches")
+def cleanup_branches_command(
+    repo_dir: Path = typer.Option(Path("."), "--repo-dir", help="Local git checkout to clean up."),
+    retention_days: int = typer.Option(
+        14, "--retention-days", help="Minimum age (days) before a merged branch is deleted."
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--no-dry-run", help="Report only (default) vs. actually delete."
+    ),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Delete every merged, expired `release/**` branch (FR-001 through
+    FR-005). `main`, `dev`, and the currently checked-out branch are never
+    candidates, regardless of ancestry or age (research.md D4).
+    """
+    try:
+        result = cleanup_branches(repo_dir=repo_dir, retention_days=retention_days, dry_run=dry_run)
+    except GitHistoryError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+
+    text_lines = [
+        f"OK: cleanup branches{' (dry run)' if dry_run else ''}.",
+        f"  deleted: {result.deleted}",
+        f"  kept: {[k.to_dict() for k in result.kept]}",
+    ]
     _emit(format, result.to_dict(), text_lines)
     raise typer.Exit(code=int(ExitCode.OK))
 

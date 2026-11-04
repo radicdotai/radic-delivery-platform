@@ -218,6 +218,20 @@ def changed_paths(repo_dir: Path, base: str, head: str) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def list_branches(repo_dir: Path, pattern: str) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname:short)", f"refs/heads/{pattern}"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not list branches matching '{pattern}' in {repo_dir}: {exc}") from exc
+    return [line for line in result.stdout.splitlines() if line]
+
+
 def fast_forward_branch(repo_dir: Path, branch: str, target: str) -> Literal["ok", "not_fast_forward"]:
     """Checks out `branch` and fast-forward-merges `target` into it.
     `--ff-only` is git's own independent re-enforcement of the same
