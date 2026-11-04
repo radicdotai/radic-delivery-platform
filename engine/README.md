@@ -16,9 +16,10 @@ release branch from it, and for capturing test-result records. See
 `specs/009-release-cut/`, `specs/010-test-result-capture/`,
 `specs/011-release-pipeline-completion/`,
 `specs/012-ci-tooling-completion/`,
-`specs/013-quality-gate-completion/`, and
-`specs/014-release-cut-workflow/` for the full specification, plan, and
-design rationale behind this package.
+`specs/013-quality-gate-completion/`,
+`specs/014-release-cut-workflow/`, and
+`specs/015-hotfix-backport-workflow/` for the full specification, plan,
+and design rationale behind this package.
 
 ## Command surface
 
@@ -58,6 +59,10 @@ radic-delivery rollback plan <...>                         # implemented (pure c
 radic-delivery release render-pr-body <...>                # implemented (deterministic PR-body rendering from a
                                                            # manifest + change-notes + real git; not in Reference
                                                            # 3's own CLI table — built to back release-cut.yml)
+radic-delivery release backport <...>                      # implemented (real cherry-pick -x of a succeeded
+                                                           # hotfix's commits onto dev; continues past any one
+                                                           # conflicting commit rather than aborting — built to
+                                                           # back hotfix-backport.yml)
 radic-delivery tests inventory <...>                       # implemented (real descriptor-driven unit-test run,
                                                            # reusing gate evaluate's own command/parser machinery;
                                                            # quarantine counting is a new, flagged ledger convention)
@@ -82,16 +87,17 @@ real. Four of those eighteen have a narrower option surface than
 Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
-has been revisited since. `security scan` and `release render-pr-body`
-both exist outside Reference 3's own CLI table entirely (`security scan`
-built from Reference 2's workflow contract in specs/003; `render-pr-body`
-built in specs/014 to back `release-cut.yml`'s own PR-body rendering)
-and aren't a stand-in for anything that table lists.
+has been revisited since. `security scan`, `release render-pr-body`, and
+`release backport` all exist outside Reference 3's own CLI table
+entirely (`security scan` built from Reference 2's workflow contract in
+specs/003; `render-pr-body` built in specs/014 to back `release-cut.yml`;
+`backport` built in specs/015 to back `hotfix-backport.yml`) and aren't a
+stand-in for anything that table lists.
 
 Of this platform's 12 reusable GitHub Actions workflows (Reference 2:
-Workflow Contracts), 4 are built — `ci`, `security`, `release-commands`,
-`release-cut` (`.github/workflows/`) — and 8 remain: `build`, `deploy`,
-`promote`, `hotfix-backport`, `rollback`, `research-deploy`, `cleanup`,
+Workflow Contracts), 5 are built — `ci`, `security`, `release-commands`,
+`release-cut`, `hotfix-backport` (`.github/workflows/`) — and 7 remain:
+`build`, `deploy`, `promote`, `rollback`, `research-deploy`, `cleanup`,
 `infra`.
 
 `gate evaluate --mode ci-gate` runs the service's own descriptor-declared
@@ -381,6 +387,30 @@ validated statically instead (`actionlint`/`zizmor`, both zero findings
 — verified directly, a stricter bar than `ci.yml` itself actually
 achieves today). See `specs/014-release-cut-workflow/research.md` D1,
 D3-D5.
+
+`release backport` cherry-picks (`-x`) every commit a succeeded hotfix's
+manifest records (its real `release_sha` values — the commits that
+actually ran in prod, not the original pre-cherry-pick `dev_sha`) onto a
+new `backport/<release_id>` branch, in the release's own chronological
+order. Unlike `release cut`'s all-or-nothing conflict handling, a
+conflicting commit here is skipped and named, never aborting the rest —
+the branch always exists at the end, carrying every commit that applied
+cleanly, with every conflicted one reported distinctly
+(`conflicted_commits`, `conflicts: true`). See
+`specs/015-hotfix-backport-workflow/research.md` D1-D3.
+
+`.github/workflows/hotfix-backport.yml` is this platform's fifth
+reusable workflow — a single job that runs `release backport`, pushes
+the resulting branch, and opens a PR into `dev` (never the hotfix/release
+branch) — as a draft naming every conflicted commit in its own body when
+`conflicts` is `true`, a normal PR otherwise. Reference 2 places this
+workflow's own `workflow_run`/success/branch-suffix gate on its caller
+(`hotfix.yml`), which this repo doesn't have yet (out of scope for this
+feature — see spec Assumptions); the job re-checks that gate itself
+defensively in the meantime, via a new, flagged `conclusion` input the
+caller is expected to pass through explicitly. Validated statically
+(`actionlint`/`zizmor`, zero findings) — this sandbox cannot execute it.
+See `specs/015-hotfix-backport-workflow/research.md` D5.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't

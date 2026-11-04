@@ -43,6 +43,7 @@ from radic_delivery.policy.rulesets_diff import DuplicateRulesetNameError
 from radic_delivery.policy.rulesets_diff import diff as diff_rulesets
 from radic_delivery.records.validator import validate as validate_test_result
 from radic_delivery.records.writer import write as write_test_result
+from radic_delivery.release.backport import backport as backport_release
 from radic_delivery.release.candidates import load_candidates
 from radic_delivery.release.cut import cut as cut_release
 from radic_delivery.release.finalise import finalise as finalise_release
@@ -571,6 +572,38 @@ def release_cut(
     if not dry_run:
         text_lines.append(f"  release_branch: {result.manifest['release_branch']}")
         text_lines.append(f"  release_head: {result.manifest['release_head']}")
+    _emit(format, result.to_dict(), text_lines)
+    raise typer.Exit(code=int(ExitCode.OK))
+
+
+@release_app.command("backport")
+def release_backport(
+    manifest_path: Path = typer.Option(..., "--manifest", help="Path to the succeeded hotfix's manifest."),
+    repo_dir: Path = typer.Option(Path("."), "--repo-dir", help="Local git checkout to backport into."),
+    into: str = typer.Option("dev", "--into", help="Target branch to create the backport branch from."),
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Cherry-pick a succeeded hotfix's already-cut commits back onto
+    `--into` (FR-001 through FR-003).
+
+    A conflicting commit is skipped and named, never aborting the rest of
+    the backport — the branch always exists at the end, carrying every
+    commit that applied cleanly.
+    """
+    manifest = json.loads(manifest_path.read_text())
+
+    try:
+        result = backport_release(manifest, repo_dir=repo_dir, into=into)
+    except GitHistoryError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        _emit(format, payload, [f"INFRA ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+
+    text_lines = [
+        f"OK: backport branch '{result.branch}' created.",
+        f"  picked_commits: {len(result.picked_commits)}",
+        f"  conflicted_commits: {result.conflicted_commits}",
+    ]
     _emit(format, result.to_dict(), text_lines)
     raise typer.Exit(code=int(ExitCode.OK))
 
