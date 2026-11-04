@@ -17,8 +17,9 @@ release branch from it, and for capturing test-result records. See
 `specs/011-release-pipeline-completion/`,
 `specs/012-ci-tooling-completion/`,
 `specs/013-quality-gate-completion/`,
-`specs/014-release-cut-workflow/`, and
-`specs/015-hotfix-backport-workflow/` for the full specification, plan,
+`specs/014-release-cut-workflow/`,
+`specs/015-hotfix-backport-workflow/`, and
+`specs/016-cleanup-branches-workflow/` for the full specification, plan,
 and design rationale behind this package.
 
 ## Command surface
@@ -63,6 +64,9 @@ radic-delivery release backport <...>                      # implemented (real c
                                                            # hotfix's commits onto dev; continues past any one
                                                            # conflicting commit rather than aborting — built to
                                                            # back hotfix-backport.yml)
+radic-delivery cleanup branches <...>                      # implemented (real merged/expired release/** branch
+                                                           # deletion; main/dev/the checked-out branch are never
+                                                           # candidates — built to back cleanup.yml's branches scope)
 radic-delivery tests inventory <...>                       # implemented (real descriptor-driven unit-test run,
                                                            # reusing gate evaluate's own command/parser machinery;
                                                            # quarantine counting is a new, flagged ledger convention)
@@ -87,18 +91,22 @@ real. Four of those eighteen have a narrower option surface than
 Reference 3 describes (noted
 above) — each gap was a deliberate scope decision recorded in that
 feature's own `research.md`/spec Assumptions, not an oversight, but none
-has been revisited since. `security scan`, `release render-pr-body`, and
-`release backport` all exist outside Reference 3's own CLI table
-entirely (`security scan` built from Reference 2's workflow contract in
-specs/003; `render-pr-body` built in specs/014 to back `release-cut.yml`;
-`backport` built in specs/015 to back `hotfix-backport.yml`) and aren't a
-stand-in for anything that table lists.
+has been revisited since. `security scan`, `release render-pr-body`,
+`release backport`, and `cleanup branches` all exist outside Reference 3's
+own CLI table entirely (`security scan` built from Reference 2's workflow
+contract in specs/003; `render-pr-body` built in specs/014 to back
+`release-cut.yml`; `backport` built in specs/015 to back
+`hotfix-backport.yml`; `cleanup branches` built in specs/016 to back
+`cleanup.yml`'s `branches` scope) and aren't a stand-in for anything that
+table lists.
 
 Of this platform's 12 reusable GitHub Actions workflows (Reference 2:
-Workflow Contracts), 5 are built — `ci`, `security`, `release-commands`,
-`release-cut`, `hotfix-backport` (`.github/workflows/`) — and 7 remain:
-`build`, `deploy`, `promote`, `rollback`, `research-deploy`, `cleanup`,
-`infra`.
+Workflow Contracts), 6 are built — `ci`, `security`, `release-commands`,
+`release-cut`, `hotfix-backport`, `cleanup` (`.github/workflows/`) — and 6
+remain: `build`, `deploy`, `promote`, `rollback`, `research-deploy`,
+`infra`. `cleanup` itself implements only its `branches` scope — the
+`research` and `images` scopes are genuinely GCP-blocked, the same as the
+6 fully-remaining workflows (specs/016 research.md D1).
 
 `gate evaluate --mode ci-gate` runs the service's own descriptor-declared
 lint/type-check/unit-test tools (assumed already installed — installing a
@@ -411,6 +419,32 @@ defensively in the meantime, via a new, flagged `conclusion` input the
 caller is expected to pass through explicitly. Validated statically
 (`actionlint`/`zizmor`, zero findings) — this sandbox cannot execute it.
 See `specs/015-hotfix-backport-workflow/research.md` D5.
+
+`cleanup branches` deletes every `release/**` branch whose tip is a real
+git ancestor of `main` (the exact fact `release finalise`'s own
+fast-forward establishes — never a GitHub PR-merge event, since release
+branches are never merged via PR) and whose last commit is older than
+`--retention-days` (default `14`, a new, flagged convention — Reference 2
+states explicit defaults for the `images`/`research` scopes but not
+`branches`). `main`, `dev`, and whatever branch is currently checked out
+are excluded before any candidate is even evaluated, unconditionally —
+never merely "evaluated and happening to fail" the merge/age checks.
+Defaults to a dry run (reports exactly what would be deleted, deletes
+nothing) unless `--no-dry-run` is given. See
+`specs/016-cleanup-branches-workflow/research.md` D1-D4.
+
+`.github/workflows/cleanup.yml` is this platform's sixth reusable
+workflow, implementing only Reference 2's `branches` scope — the
+`research` and `images` scopes both require live GCP calls (Cloud Run
+revision deletion, Artifact Registry image deletion) and are out of scope
+for this feature (any other `scope` value fails the job outright with a
+named error, never silently running the `branches` logic regardless). A
+single job runs `cleanup branches`, then for each branch the result
+reports as deleted (when not a dry run), pushes a real
+`git push origin --delete <branch>` — since a purely local delete inside
+an ephemeral CI runner has no lasting effect on the real remote. Validated
+statically (`actionlint`/`zizmor`, zero findings) — this sandbox cannot
+execute it. See `specs/016-cleanup-branches-workflow/research.md` D5.
 
 Every "not implemented yet" command exits with a distinct code (64) that is
 never one of the four real outcomes below, so a caller can tell "this isn't
