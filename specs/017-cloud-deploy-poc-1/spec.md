@@ -116,8 +116,9 @@ sandbox serves A's digest; the duration is recorded.
 
 ### User Story 4 - Drift is detected (Priority: P2)
 
-The drift command compares the live sandbox service with the YAML of the
-last rollout and with `terraform plan`, and reports any difference.
+The drift command compares the live sandbox service with the manifest of
+the last rollout and reports any difference; the U1 script separately
+confirms `terraform plan` stays clean.
 
 **Why this priority**: the design's ownership boundary (Technical Design
 §9.4) only holds if Terraform never reverts a Cloud Deploy revision (U1)
@@ -129,8 +130,9 @@ field.
 
 **Acceptance Scenarios**:
 
-1. **Given** three consecutive Cloud Deploy rollouts, **When** drift runs,
-   **Then** `terraform plan` shows zero changes for the sandbox service.
+1. **Given** three consecutive Cloud Deploy rollouts, **When** the U1
+   script runs, **Then** `terraform plan` shows zero changes for the
+   sandbox service, and drift reports none.
 2. **Given** a manual console change to the sandbox, **When** drift runs,
    **Then** it names the changed field and exits non-zero.
 
@@ -194,7 +196,7 @@ sandbox serves the new digest and the old services do not change.
 - The engine is asked to act on a pipeline not named in the descriptor: it
   refuses; names come only from the descriptor's `cloud_deploy` block.
 - A Cloud Deploy call returns an error the engine does not recognise: the
-  command fails with the raw error and exit code `30` (infrastructure
+  command fails with the raw error and exit code `4` (infrastructure
   error), never a partial success.
 - Teardown: after the exit review every sandbox resource is destroyed and
   a listing of pipelines, targets, services and service accounts shows
@@ -225,10 +227,14 @@ sandbox serves the new digest and the old services do not change.
 - **FR-006**: `deploy status` MUST be read-only and report release,
   rollout, state and serving digest for a target.
 - **FR-007**: `deploy drift` MUST be read-only and report differences
-  between the live service, the last rolled-out YAML and `terraform plan`.
+  between the live service and the manifest Cloud Deploy rendered for the
+  last successful rollout. The `terraform plan` half of the boundary check
+  (U1) lives in the PoC script, not the engine, because the engine holds no
+  Terraform state access.
 - **FR-008**: Every command MUST emit the same machine-readable JSON and
-  human-readable forms as the existing commands, and use the existing
-  exit-code contract (`0`, `10`, `20`, `30`).
+  human-readable forms as the existing commands, and use the engine's
+  existing exit-code contract (`0` ok, `2` invalid input, `3` policy
+  failure, `4` infrastructure error).
 - **FR-009**: The engine remains the only code path to `gcloud deploy` and
   `gcloud run` (constitution rule 12); tests run without GCP by faking the
   `gcloud` boundary, and the live PoC proves the real calls.
