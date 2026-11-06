@@ -93,6 +93,13 @@ resource "google_storage_bucket_iam_member" "source" {
   member = each.value
 }
 
+resource "google_storage_bucket_iam_member" "source_bucket_get" {
+  for_each = google_storage_bucket_iam_member.source
+  bucket   = google_storage_bucket.source.name
+  role     = "roles/storage.legacyBucketReader"
+  member   = each.value.member
+}
+
 resource "google_storage_bucket_iam_member" "approver_reads" {
   bucket = google_storage_bucket.source.name
   role   = "roles/storage.objectViewer"
@@ -115,7 +122,7 @@ resource "google_cloud_run_v2_service" "sandbox" {
   }
 
   lifecycle {
-    ignore_changes = [template, traffic, client, client_version]
+    ignore_changes = [template, traffic, client, client_version, scaling]
   }
 }
 
@@ -232,6 +239,19 @@ resource "google_clouddeploy_delivery_pipeline_iam_member" "duty" {
       expression = join(" || ", [for t in condition.value : "${local.rollout_target} == '${t}'"])
     }
   }
+}
+
+resource "google_project_iam_custom_role" "operations_reader" {
+  role_id     = "cdpocDeployOperationsReader"
+  title       = "PoC-1 Cloud Deploy operation reader"
+  permissions = ["clouddeploy.operations.get"]
+}
+
+resource "google_project_iam_member" "operations_reader" {
+  for_each = toset(["rel-dev", "rel-stage", "prod-promoter", "prod-approver", "rollback"])
+  project  = local.project
+  role     = google_project_iam_custom_role.operations_reader.id
+  member   = google_service_account.duty[each.key].member
 }
 
 resource "google_service_account_iam_member" "operator_impersonates" {
