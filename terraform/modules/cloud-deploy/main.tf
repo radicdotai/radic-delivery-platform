@@ -2,6 +2,7 @@ variable "project_id" { type = string }
 variable "region" { type = string }
 variable "deployable" { type = string }
 variable "artifact_storage" { type = string }
+variable "render_sa" { type = string }
 variable "targets" {
   type = map(object({
     service_name  = string
@@ -25,7 +26,13 @@ resource "google_clouddeploy_target" "this" {
   }
 
   execution_configs {
-    usages           = ["RENDER", "DEPLOY"]
+    usages           = ["RENDER"]
+    service_account  = var.render_sa
+    artifact_storage = var.artifact_storage
+  }
+
+  execution_configs {
+    usages           = ["DEPLOY"]
     service_account  = each.value.execution_sa
     artifact_storage = var.artifact_storage
   }

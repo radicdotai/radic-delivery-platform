@@ -16,7 +16,7 @@ snapshot() {
 }
 
 if [[ "${1:-}" == --compare ]]; then
-  diff <(cut -f1-4 "$OUT") <(snapshot) && echo "real services unchanged"
+  diff "$OUT" <(snapshot) && echo "real services unchanged"
 else
   snapshot > "$OUT"
   echo "wrote $(wc -l < "$OUT") services to $OUT"

@@ -305,6 +305,7 @@ def test_drift_compares_fields_and_hides_env_values() -> None:
                                 "image": image,
                                 "env": [{"name": "BFF_URL", "value": env_value}],
                                 "resources": {"limits": {"cpu": cpu}},
+                                "ports": [{"containerPort": 3000}],
                             }
                         ],
                     },
@@ -316,6 +317,11 @@ def test_drift_compares_fields_and_hides_env_values() -> None:
     live = svc(IMAGE, "https://bff", "1")
     live["spec"]["template"]["metadata"]["annotations"]["run.googleapis.com/operation-id"] = "x"
     assert compare(rendered, live) == []
+    defaults = svc(IMAGE, "https://bff", "1")
+    c = defaults["spec"]["template"]["spec"]["containers"][0]
+    c["ports"] = [{"containerPort": 3000, "name": "http1"}]
+    c["resources"]["limits"]["memory"] = "512Mi"
+    assert compare(rendered, defaults) == []
     changed = svc(IMAGE, "https://evil", "2")
     diffs = compare(rendered, changed)
     assert {d["field"] for d in diffs} == {"container.resources", "container.env.BFF_URL"}

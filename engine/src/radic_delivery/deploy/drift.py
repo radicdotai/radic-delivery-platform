@@ -15,6 +15,18 @@ def _template(service: dict[str, Any]) -> dict[str, Any]:
     return service.get("spec", {}).get("template", {}) or {}
 
 
+def _covers(expected: Any, live: Any) -> bool:
+    if isinstance(expected, dict):
+        return isinstance(live, dict) and all(_covers(v, live.get(k)) for k, v in expected.items())
+    if isinstance(expected, list):
+        return (
+            isinstance(live, list)
+            and len(expected) == len(live)
+            and all(_covers(e, v) for e, v in zip(expected, live, strict=True))
+        )
+    return bool(str(expected) == str(live)) if expected is not None and live is not None else expected == live
+
+
 def _env_map(container: dict[str, Any]) -> dict[str, Any]:
     return {e["name"]: {k: v for k, v in e.items() if k != "name"} for e in container.get("env", []) or []}
 
@@ -31,22 +43,24 @@ def compare(rendered: dict[str, Any], live: dict[str, Any]) -> list[dict[str, An
             )
     want_s, have_s = want_t.get("spec", {}) or {}, have_t.get("spec", {}) or {}
     for key in _SPEC_FIELDS:
-        if key in want_s and want_s.get(key) != have_s.get(key):
+        if key in want_s and not _covers(want_s.get(key), have_s.get(key)):
             diffs.append({"field": f"spec.{key}", "expected": want_s.get(key), "live": have_s.get(key)})
     want_c = (want_s.get("containers") or [{}])[0]
     have_c = (have_s.get("containers") or [{}])[0]
     for key in _CONTAINER_FIELDS:
-        if key in want_c and want_c.get(key) != have_c.get(key):
+        if key in want_c and not _covers(want_c.get(key), have_c.get(key)):
             diffs.append({"field": f"container.{key}", "expected": want_c.get(key), "live": have_c.get(key)})
     want_env, have_env = _env_map(want_c), _env_map(have_c)
     for name in sorted(want_env.keys() | have_env.keys()):
-        if want_env.get(name) != have_env.get(name):
+        if not _covers(want_env.get(name), have_env.get(name)):
             diffs.append(
                 {
                     "field": f"container.env.{name}",
                     "changed": True,
-                    "expected": "present" if name in want_env else "absent",
-                    "live": "present" if name in have_env else "absent",
+                    "expected": "set" if name in want_env else "absent",
+                    "live": ("value differs" if name in want_env else "set")
+                    if name in have_env
+                    else "absent",
                 }
             )
     return diffs

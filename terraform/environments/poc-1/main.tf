@@ -37,8 +37,9 @@ locals {
 }
 
 provider "google" {
-  project = local.project
-  region  = local.region
+  project                         = local.project
+  region                          = local.region
+  add_terraform_attribution_label = false
 }
 
 resource "google_service_account" "duty" {
@@ -51,6 +52,31 @@ resource "google_service_account" "exec" {
   for_each     = local.envs
   account_id   = "cdpoc-exec-${each.key}"
   display_name = "PoC-1 Cloud Deploy execution ${each.key}"
+}
+
+resource "google_service_account" "render" {
+  account_id   = "cdpoc-render"
+  display_name = "PoC-1 Cloud Deploy render (all targets)"
+}
+
+resource "google_project_iam_member" "render_job_runner" {
+  project = local.project
+  role    = "roles/clouddeploy.jobRunner"
+  member  = google_service_account.render.member
+}
+
+resource "google_storage_bucket_iam_member" "render_bucket" {
+  for_each = toset(["roles/storage.objectAdmin", "roles/storage.legacyBucketReader"])
+  bucket   = google_storage_bucket.source.name
+  role     = each.key
+  member   = google_service_account.render.member
+}
+
+resource "google_service_account_iam_member" "acts_as_render" {
+  for_each           = toset(["rel-dev", "rel-stage", "prod-promoter", "rollback"])
+  service_account_id = google_service_account.render.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = google_service_account.duty[each.key].member
 }
 
 resource "google_service_account" "runtime" {
@@ -200,6 +226,7 @@ module "cloud_deploy" {
   region           = local.region
   deployable       = local.deployable
   artifact_storage = "gs://${local.bucket}/artifacts"
+  render_sa        = google_service_account.render.email
   targets = {
     for e, v in local.envs : e => merge(v, {
       service_name = google_cloud_run_v2_service.sandbox[e].name
