@@ -189,6 +189,20 @@ def gate_evaluate(
     digest: str | None = typer.Option(
         None, "--digest", help="release-gate only: the exact digest being evaluated."
     ),
+    manifest_path: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help="release-gate only: the release manifest to check Prereqs/Depends-on against "
+        "(specs/019); omit to skip both checks entirely, with no change to the overall result.",
+    ),
+    change_notes_dir: Path | None = typer.Option(
+        None, "--change-notes-dir", help="release-gate only: root of the local change-notes/ tree."
+    ),
+    known_prod_tickets: str | None = typer.Option(
+        None,
+        "--known-prod-tickets",
+        help="release-gate only: comma-separated ticket keys already known to be in production.",
+    ),
     format: OutputFormat = FormatOption,
 ) -> None:
     """Evaluate the quality gate for a service (FR-002 through FR-013)."""
@@ -206,6 +220,13 @@ def gate_evaluate(
         repo_root=repo_root,
         results_dir=results_dir,
         digest=digest,
+        manifest=json.loads(manifest_path.read_text()) if manifest_path is not None else None,
+        change_notes_dir=change_notes_dir,
+        known_prod_tickets=(
+            [key.strip() for key in known_prod_tickets.split(",") if key.strip()]
+            if known_prod_tickets
+            else None
+        ),
     )
     _emit_gate_result(format, result)
 
@@ -539,6 +560,12 @@ def release_cut(
         help="Comma-separated paths to other already-known manifests for this service "
         "(specs/018); refuses the cut if any is still open.",
     ),
+    known_prod_tickets: str | None = typer.Option(
+        None,
+        "--known-prod-tickets",
+        help="Comma-separated ticket keys already known to be in production (specs/019); "
+        "satisfies a selected ticket's Depends-on without it being in this selection.",
+    ),
     format: OutputFormat = FormatOption,
 ) -> None:
     """Create release/<id> from main and cherry-pick the manifest's
@@ -555,6 +582,9 @@ def release_cut(
         if other_manifests
         else None
     )
+    loaded_known_prod_tickets = (
+        [key.strip() for key in known_prod_tickets.split(",") if key.strip()] if known_prod_tickets else None
+    )
 
     try:
         result = cut_release(
@@ -565,6 +595,7 @@ def release_cut(
             hotfix=hotfix,
             dry_run=dry_run,
             other_manifests=loaded_other_manifests,
+            known_prod_tickets=loaded_known_prod_tickets,
         )
     except GitHistoryError as exc:
         payload = {"ok": False, "error": str(exc)}
@@ -808,6 +839,12 @@ def notes_write(
         "--phase-header-required/--no-phase-header-required",
         help="Whether an added migration file's contract-phase marker can be reliably detected.",
     ),
+    pr_body_file: Path | None = typer.Option(
+        None,
+        "--pr-body-file",
+        help="Path to the raw PR body text; computes prereqs/depends_on from its "
+        "Prereqs:/Depends-on: content (specs/019). Omit to leave both empty.",
+    ),
     uat_escape: bool = typer.Option(False, "--uat-escape/--no-uat-escape"),
     regression_test_added: bool = typer.Option(False, "--regression-test-added/--no-regression-test-added"),
     author: str | None = typer.Option(None, "--author"),
@@ -818,10 +855,12 @@ def notes_write(
     """Build, validate, and write one change-note record (FR-001 through FR-004).
 
     Never fetches a pull request's details from GitHub itself — every
-    field is explicit input (FR-010), with one deliberate exception:
+    field is explicit input (FR-010), with two deliberate exceptions:
     `migration` is always computed from the real `base`..`head` diff
-    (specs/017), never a free input. The real GCS upload is not
-    implemented; `upload_status` always reports `not_available`.
+    (specs/017), and `prereqs`/`depends_on` are always computed from
+    `--pr-body-file` when given (specs/019) — never free input. The real
+    GCS upload is not implemented; `upload_status` always reports
+    `not_available`.
     """
     build_result = build_record(
         repo=repo,
@@ -833,6 +872,7 @@ def notes_write(
         summary=summary,
         jira_key=jira_key,
         linked_prs=[item.strip() for item in linked_prs.split(",") if item.strip()] if linked_prs else None,
+        pr_body=pr_body_file.read_text() if pr_body_file is not None else None,
         repo_dir=repo_dir,
         base=base,
         head=head,

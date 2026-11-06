@@ -81,6 +81,38 @@ def test_notes_write_computes_migration_from_the_real_diff(repo: Path, tmp_path:
     assert json.loads(result.stdout)["record"]["migration"] == "expand"
 
 
+def test_notes_write_pr_body_file_populates_prereqs_and_depends_on(repo: Path, tmp_path: Path) -> None:
+    pr_body_file = tmp_path / "pr-body.txt"
+    pr_body_file.write_text("Prereqs:\n- [x] flag created\n\nDepends-on: RAD-11\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "notes", "write",
+            *_valid_write_args(repo),
+            "--pr-body-file", str(pr_body_file),
+            "--out-dir", str(tmp_path), "--format", "json",
+        ],
+    )
+    assert result.exit_code == int(ExitCode.OK)
+    record = json.loads(result.stdout)["record"]
+    assert record["prereqs"] == [{"item": "flag created", "done": True}]
+    assert record["depends_on"] == ["RAD-11"]
+
+
+def test_notes_write_without_pr_body_file_leaves_prereqs_and_depends_on_empty(
+    repo: Path, tmp_path: Path
+) -> None:
+    result = runner.invoke(
+        app,
+        ["notes", "write", *_valid_write_args(repo), "--out-dir", str(tmp_path), "--format", "json"],
+    )
+    assert result.exit_code == int(ExitCode.OK)
+    record = json.loads(result.stdout)["record"]
+    assert record["prereqs"] == []
+    assert record["depends_on"] == []
+
+
 def test_invalid_notes_write_exits_invalid_input_and_writes_nothing(repo: Path, tmp_path: Path) -> None:
     args = _valid_write_args(repo)
     type_index = args.index("--type") + 1

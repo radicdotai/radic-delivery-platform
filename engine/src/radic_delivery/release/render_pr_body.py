@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from radic_delivery.release.git_history import changed_paths
 
@@ -39,6 +39,64 @@ def _lookup_change_note(change_notes_dir: Path, repo: str, sha: str | None) -> t
     except (OSError, json.JSONDecodeError):
         return "(unknown)", "(unknown)"
     return record.get("title", "(unknown)"), record.get("type", "(unknown)")
+
+
+def _read_change_note(change_notes_dir: Path, repo: str, sha: str) -> dict[str, Any] | None:
+    path = change_notes_dir / "change-notes" / repo / f"{sha}.json"
+    if not path.is_file():
+        return None
+    try:
+        return cast(dict[str, Any], json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _ticket_prereqs_and_depends_on(
+    change_notes_dir: Path, repo: str, ticket: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Aggregates prereqs/depends_on across every commit's change-note
+    record for one ticket (specs/019 research.md D4) — a ticket may have
+    more than one commit, each with its own PR-body declarations."""
+    prereqs: list[dict[str, Any]] = []
+    depends_on: list[str] = []
+    for commit in ticket.get("commits", []):
+        note = _read_change_note(change_notes_dir, repo, commit["dev_sha"])
+        if note is None:
+            continue
+        prereqs.extend(note.get("prereqs", []))
+        for key in note.get("depends_on", []):
+            if key not in depends_on:
+                depends_on.append(key)
+    return prereqs, depends_on
+
+
+def _prereqs_and_depends_on_section(manifest: dict[str, Any], change_notes_dir: Path, repo: str) -> str:
+    lines = [
+        "### Prereqs and dependencies",
+        "",
+        "| Jira | Prereqs (ticked / total) | Depends-on |",
+        "|------|---------------------------|------------|",
+    ]
+    for ticket in manifest["selection"]["tickets"]:
+        prereqs, depends_on = _ticket_prereqs_and_depends_on(change_notes_dir, repo, ticket)
+        ticked = sum(1 for item in prereqs if item.get("done"))
+        depends_on_text = ", ".join(depends_on) if depends_on else "(none)"
+        lines.append(f"| {ticket['key']} | {ticked} / {len(prereqs)} | {depends_on_text} |")
+    return "\n".join(lines)
+
+
+def _all_prereqs_ticked_and_depends_on_satisfied(
+    manifest: dict[str, Any], change_notes_dir: Path, repo: str
+) -> bool:
+    selected_keys = {ticket["key"] for ticket in manifest["selection"]["tickets"]}
+    for ticket in manifest["selection"]["tickets"]:
+        prereqs, depends_on = _ticket_prereqs_and_depends_on(change_notes_dir, repo, ticket)
+        if any(not item.get("done") for item in prereqs):
+            return False
+        for key in depends_on:
+            if key != ticket["key"] and key not in selected_keys:
+                return False
+    return True
 
 
 def _is_deploy_relevant(path: str) -> bool:
@@ -152,6 +210,7 @@ def render(
     stage_regression_result = manifest.get("gates", {}).get("stage_regression", {}).get("result")
     stage_rollout = cloud_deploy.get("rollouts", {}).get("stage", {}) if cloud_deploy else {}
     stage_rollout_ok = stage_rollout.get("state") == "SUCCEEDED" and stage_rollout.get("verify") == "pass"
+    prereqs_and_depends_on_ok = _all_prereqs_ticked_and_depends_on_satisfied(manifest, change_notes_dir, repo)
 
     non_jira_prs_section = _non_jira_prs_section(manifest, change_notes_dir, repo)
 
@@ -188,6 +247,8 @@ def render(
         f"Changes to deploy/skaffold.yaml or deploy/run/*.yaml in this release: {deploy_section_fact}"
         + (f"   (files: {', '.join(deploy_files_changed)})" if deploy_files_changed else ""),
         "",
+        _prereqs_and_depends_on_section(manifest, change_notes_dir, repo),
+        "",
         "### Gates",
         f"- [x] Dev-green gate: all selected commits passed dev regression and e2e "
         f"(waived: {'yes' if dev_green_waived else 'no'})",
@@ -206,6 +267,8 @@ def render(
         "for the exact digest",
         f"- [{'x' if stage_regression_result == 'pass' else ' '}] Stage full regression record for the exact "
         "digest present and green (blocks prod if missing)",
+        f"- [{'x' if prereqs_and_depends_on_ok else ' '}] Every selected ticket has all Prereqs "
+        "ticked and its Depends-on tickets are in prod or in this release",
         "",
         "### Commands",
         "`/release remove KEY` | `/release add KEY reason: text` | `/release nonjira PR reason: text` | "

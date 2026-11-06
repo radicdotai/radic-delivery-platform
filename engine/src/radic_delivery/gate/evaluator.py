@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from radic_delivery.gate import runner as runner_module
 from radic_delivery.gate.commands import ToolInvocation, build_commands
@@ -200,6 +200,83 @@ def _check_stage_regression(results_dir: Path | None, digest: str | None) -> Che
     )
 
 
+def _read_change_note(change_notes_dir: Path, repo: str, sha: str) -> dict[str, Any] | None:
+    path = change_notes_dir / "change-notes" / repo / f"{sha}.json"
+    if not path.is_file():
+        return None
+    try:
+        return cast(dict[str, Any], json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _check_prereqs(manifest: dict[str, Any], change_notes_dir: Path | None) -> CheckResult:
+    """release-gate only: every selected ticket's Prereqs checklist must
+    be fully ticked (specs/019 research.md D5). Only ever called when a
+    manifest was supplied (research.md D5, corrected) — an existing
+    release-gate caller that never passes `--manifest` gets no new check
+    appended at all, never a `not_executable` that would fail the overall
+    result for something it never opted into."""
+    if change_notes_dir is None:
+        return CheckResult(
+            name="prereqs",
+            status="not_executable",
+            detail="release-gate requires --change-notes-dir (alongside --manifest) to evaluate Prereqs.",
+        )
+
+    repo = manifest["repo"]
+    for ticket in manifest["selection"]["tickets"]:
+        for commit in ticket.get("commits", []):
+            note = _read_change_note(change_notes_dir, repo, commit["dev_sha"])
+            if note is None:
+                continue
+            for item in note.get("prereqs", []):
+                if not item.get("done"):
+                    return CheckResult(
+                        name="prereqs",
+                        status="fail",
+                        detail=f"ticket {ticket['key']} has an unticked Prereqs item: "
+                        f"{item.get('item', '(unnamed)')!r}.",
+                    )
+    return CheckResult(name="prereqs", status="pass", detail="every selected ticket's Prereqs are ticked.")
+
+
+def _check_depends_on(
+    manifest: dict[str, Any], change_notes_dir: Path | None, known_prod_tickets: list[str] | None
+) -> CheckResult:
+    """release-gate only: every selected ticket's Depends-on tickets must
+    be in the selection or already known to be in production (specs/019
+    research.md D5). Only ever called when a manifest was supplied — see
+    `_check_prereqs`'s own docstring for why."""
+    if change_notes_dir is None:
+        return CheckResult(
+            name="depends_on",
+            status="not_executable",
+            detail="release-gate requires --change-notes-dir (alongside --manifest) to evaluate Depends-on.",
+        )
+
+    repo = manifest["repo"]
+    selected_keys = {ticket["key"] for ticket in manifest["selection"]["tickets"]}
+    known = set(known_prod_tickets or [])
+    for ticket in manifest["selection"]["tickets"]:
+        for commit in ticket.get("commits", []):
+            note = _read_change_note(change_notes_dir, repo, commit["dev_sha"])
+            if note is None:
+                continue
+            for dep in note.get("depends_on", []):
+                if dep == ticket["key"] or dep in selected_keys or dep in known:
+                    continue
+                return CheckResult(
+                    name="depends_on",
+                    status="fail",
+                    detail=f"ticket {ticket['key']} depends on {dep}, which is neither selected "
+                    "nor known to be in production.",
+                )
+    return CheckResult(
+        name="depends_on", status="pass", detail="every selected ticket's Depends-on tickets are satisfied."
+    )
+
+
 def evaluate(
     descriptor: dict[str, Any],
     mode: Mode,
@@ -210,6 +287,9 @@ def evaluate(
     as_of: date | None = None,
     results_dir: Path | None = None,
     digest: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    change_notes_dir: Path | None = None,
+    known_prod_tickets: list[str] | None = None,
 ) -> GateResult:
     del run_mutation  # accepted per FR-012; mutation.status is always "not_implemented" below
 
@@ -277,6 +357,9 @@ def evaluate(
 
     if mode == "release-gate":
         checks.append(_check_stage_regression(results_dir, digest))
+        if manifest is not None:
+            checks.append(_check_prereqs(manifest, change_notes_dir))
+            checks.append(_check_depends_on(manifest, change_notes_dir, known_prod_tickets))
 
     return GateResult(
         mode=mode,
