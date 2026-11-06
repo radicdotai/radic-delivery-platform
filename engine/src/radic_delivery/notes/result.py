@@ -37,6 +37,32 @@ class WriteResult:
         return {"local_path": self.local_path, "upload_status": self.upload_status}
 
 
+MigrationFlag = Literal["none", "expand", "contract"]
+
+
+@dataclass(frozen=True)
+class MigrationCheckResult:
+    """Cross-checks a computed migration flag against an optional
+    `Migrations:` PR-body declaration (specs/017 research.md D5). Unlike
+    `ReleaseNoteCheckResult`, there is no blocking/non-blocking mode: a
+    real mismatch always fails."""
+
+    computed: MigrationFlag
+    declared: MigrationFlag | None
+    matched: bool
+    passed: bool
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "computed": self.computed,
+            "declared": self.declared,
+            "matched": self.matched,
+            "passed": self.passed,
+            "detail": self.detail,
+        }
+
+
 @dataclass(frozen=True)
 class ReleaseNoteCheckResult:
     classification: Classification

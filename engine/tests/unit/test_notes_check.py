@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from radic_delivery.notes.check import classify
+from radic_delivery.notes.check import check_migration_match, classify, classify_migration_declaration
 from radic_delivery.notes.result import build_check_result
 
 # --- US2: has_jira_key / explicit_none / incomplete classification ----------
@@ -75,3 +75,30 @@ def test_has_jira_key_always_passes(blocking: bool) -> None:
 def test_explicit_none_always_passes(blocking: bool) -> None:
     result = build_check_result("explicit_none", None, blocking=blocking)
     assert result.passed is True
+
+
+# --- migration-flag cross-check (spec.md Acceptance Scenarios, US2) ----------
+
+
+def test_pr_body_declaring_a_mismatched_migration_value_fails_naming_both() -> None:
+    declared = classify_migration_declaration("Jira: RAD-1\nMigrations: none\n")
+    result = check_migration_match(computed="expand", declared=declared)
+    assert result.passed is False
+    assert result.matched is False
+    assert "none" in result.detail and "expand" in result.detail
+
+
+def test_pr_body_declaring_a_matching_migration_value_passes() -> None:
+    declared = classify_migration_declaration("Migrations: contract\n")
+    result = check_migration_match(computed="contract", declared=declared)
+    assert result.passed is True
+    assert result.matched is True
+
+
+@pytest.mark.parametrize("computed", ["none", "expand", "contract"])
+def test_pr_body_with_no_migrations_line_passes_regardless_of_computed_value(computed: str) -> None:
+    declared = classify_migration_declaration("Jira: RAD-1\nNo migrations line here.\n")
+    assert declared is None
+    result = check_migration_match(computed=computed, declared=declared)  # type: ignore[arg-type]
+    assert result.passed is True
+    assert result.declared is None

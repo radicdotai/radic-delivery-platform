@@ -32,7 +32,9 @@ from radic_delivery.migrations.frozen import check_frozen
 from radic_delivery.migrations.graph import check_graph
 from radic_delivery.migrations.result import MigrationsCheckResult
 from radic_delivery.notes.builder import build_record
+from radic_delivery.notes.check import check_migration_match, classify_migration_declaration
 from radic_delivery.notes.check import classify as classify_pr_body
+from radic_delivery.notes.migration_flag import compute as compute_migration_flag
 from radic_delivery.notes.result import build_check_result
 from radic_delivery.notes.writer import write as write_change_note
 from radic_delivery.paths import policy_dir
@@ -779,7 +781,21 @@ def notes_write(
     linked_prs: str | None = typer.Option(
         None, "--linked-prs", help="Comma-separated cross-repo refs, e.g. radicdotai/frontend-v2#456."
     ),
-    migration: bool = typer.Option(False, "--migration/--no-migration"),
+    repo_dir: Path = typer.Option(
+        ..., "--repo-dir", help="Local checkout to diff `base`..`head` in, for migration-flag computation."
+    ),
+    base: str = typer.Option(..., "--base", help="Diff base ref."),
+    head: str = typer.Option(..., "--head", help="Diff head ref."),
+    legacy_dir: str = typer.Option(
+        "migrations/legacy",
+        "--legacy-dir",
+        help="Migration files under this path are never a qualifying addition.",
+    ),
+    phase_header_required: bool = typer.Option(
+        True,
+        "--phase-header-required/--no-phase-header-required",
+        help="Whether an added migration file's contract-phase marker can be reliably detected.",
+    ),
     uat_escape: bool = typer.Option(False, "--uat-escape/--no-uat-escape"),
     regression_test_added: bool = typer.Option(False, "--regression-test-added/--no-regression-test-added"),
     author: str | None = typer.Option(None, "--author"),
@@ -790,7 +806,9 @@ def notes_write(
     """Build, validate, and write one change-note record (FR-001 through FR-004).
 
     Never fetches a pull request's details from GitHub itself — every
-    field is explicit input (FR-010). The real GCS upload is not
+    field is explicit input (FR-010), with one deliberate exception:
+    `migration` is always computed from the real `base`..`head` diff
+    (specs/017), never a free input. The real GCS upload is not
     implemented; `upload_status` always reports `not_available`.
     """
     build_result = build_record(
@@ -803,7 +821,11 @@ def notes_write(
         summary=summary,
         jira_key=jira_key,
         linked_prs=[item.strip() for item in linked_prs.split(",") if item.strip()] if linked_prs else None,
-        migration=migration,
+        repo_dir=repo_dir,
+        base=base,
+        head=head,
+        legacy_dir=legacy_dir,
+        phase_header_required=phase_header_required,
         uat_escape=uat_escape,
         regression_test_added=regression_test_added,
         author=author,
@@ -842,26 +864,60 @@ def notes_check(
     require_jira_key: bool = typer.Option(
         False, "--require-jira-key", help="Block (exit 3) on an incomplete body instead of only warning."
     ),
+    repo_dir: Path | None = typer.Option(
+        None,
+        "--repo-dir",
+        help="Local checkout to diff `base`..`head` in, to also cross-check the PR body's migration "
+        "declaration (specs/017); omit to preserve the Jira-only check exactly as before.",
+    ),
+    base: str | None = typer.Option(None, "--base", help="Diff base ref (requires --repo-dir/--head)."),
+    head: str | None = typer.Option(None, "--head", help="Diff head ref (requires --repo-dir/--base)."),
+    legacy_dir: str = typer.Option("migrations/legacy", "--legacy-dir"),
+    phase_header_required: bool = typer.Option(
+        True, "--phase-header-required/--no-phase-header-required"
+    ),
     format: OutputFormat = FormatOption,
 ) -> None:
     """Classify a PR body's Jira-reference completeness (FR-006 through FR-009).
 
     The PR body is read from a file, never a raw CLI text argument, since
-    it is attacker-influenced free text (FR-005).
+    it is attacker-influenced free text (FR-005). When `--repo-dir`,
+    `--base`, and `--head` are all supplied, also cross-checks the real,
+    computed migration flag against an optional `Migrations:` PR-body
+    line (specs/017) — omitted entirely, this preserves today's
+    Jira-only behaviour exactly.
     """
-    classification, jira_key = classify_pr_body(pr_body_file.read_text())
+    pr_body = pr_body_file.read_text()
+    classification, jira_key = classify_pr_body(pr_body)
     result = build_check_result(classification, jira_key, blocking=require_jira_key)
 
-    payload = result.to_dict()
+    payload: dict[str, object] = dict(result.to_dict())
     text_lines = [f"Release-note check: {result.classification}"]
     if result.jira_key is not None:
         text_lines.append(f"  jira_key: {result.jira_key}")
     if result.detail:
         text_lines.append(f"  detail: {result.detail}")
     text_lines.append(f"  passed: {result.passed}")
+
+    overall_passed = result.passed
+    if repo_dir is not None and base is not None and head is not None:
+        computed = compute_migration_flag(
+            repo_dir, base, head, legacy_dir=legacy_dir, phase_header_required=phase_header_required
+        )
+        declared = classify_migration_declaration(pr_body)
+        migration_result = check_migration_match(computed=computed, declared=declared)
+        payload["migration"] = migration_result.to_dict()
+        text_lines.append(
+            f"Migration check: computed={migration_result.computed} declared={migration_result.declared}"
+        )
+        if migration_result.detail:
+            text_lines.append(f"  detail: {migration_result.detail}")
+        text_lines.append(f"  passed: {migration_result.passed}")
+        overall_passed = overall_passed and migration_result.passed
+
     _emit(format, payload, text_lines)
 
-    raise typer.Exit(code=int(ExitCode.OK if result.passed else ExitCode.POLICY_FAILURE))
+    raise typer.Exit(code=int(ExitCode.OK if overall_passed else ExitCode.POLICY_FAILURE))
 
 
 # --- policy ------------------------------------------------------------

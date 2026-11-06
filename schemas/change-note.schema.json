@@ -30,7 +30,12 @@
       "items": { "type": "string", "pattern": "^radicdotai/[A-Za-z0-9_.-]+#[0-9]+$" },
       "description": "Cross-repo PR references, e.g. radicdotai/frontend-v2#456."
     },
-    "migration": { "type": "boolean", "default": false },
+    "migration": {
+      "type": "string",
+      "enum": ["none", "expand", "contract"],
+      "default": "none",
+      "description": "Computed from the diff, never typed by the author: expand/contract when the PR adds a file under migrations/versions/ (migrations/legacy/ excluded), otherwise none (specs/017 research.md D1-D3)."
+    },
     "uat_escape": { "type": "boolean" },
     "regression_test_added": {
       "type": "boolean",

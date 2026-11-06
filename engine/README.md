@@ -172,18 +172,27 @@ architecture's `command` output has no slot for either — see
 `specs/006-release-commands-workflow/data-model.md` for the full mapping
 table and `research.md` for why.
 
-`notes write` builds a change-note record from fully-explicit CLI inputs
-(never fetching a PR's title/body/author from GitHub itself — that
-remains the calling workflow's job), validates it against
+`notes write` builds a change-note record from explicit CLI inputs (never
+fetching a PR's title/body/author from GitHub itself — that remains the
+calling workflow's job), validates it against
 `schemas/change-note.schema.json`, and writes it to a local path. The real
 `gs://radicai-release-records/...` upload is not implemented; the result
 always reports `upload_status: "not_available"`, never silently omitted or
 faked as successful. `jira_key` accepts either a real ticket key or the
-literal `"None"` for a change shipped without one — this schema
-accommodation, and the full tightened schema, are new in this feature (the
-schema existed since feature 001 but was an intentionally loose
-placeholder until now). See `specs/007-change-note-capture/data-model.md`
-for the full record shape.
+literal `"None"` for a change shipped without one. See
+`specs/007-change-note-capture/data-model.md` for the full record shape.
+**`migration` is the one field that is never free CLI input**
+(`specs/017-migration-flag-computation`): `--repo-dir`/`--base`/`--head`
+(required) diff a real local checkout, and the record's `migration` value
+(`none`/`expand`/`contract`) is always computed from that diff, per
+Confluence Reference 3 §2 — never typed by the caller. Optional
+`--legacy-dir` (default `migrations/legacy`) and
+`--phase-header-required`/`--no-phase-header-required` (default on) match
+the per-repo descriptor fields a later feature wires through for real; see
+`specs/017-migration-flag-computation/research.md` D1-D3 for the resolved
+`# phase: contract` marker convention (correcting a real, flagged
+inconsistency in Confluence's own `-- phase: contract` text, which cannot
+apply to a `.py` migration file).
 
 `notes check` reads a PR body from a file (never a raw CLI text argument)
 and classifies it as `has_jira_key`, `explicit_none` (the PR body states
@@ -192,7 +201,14 @@ incomplete body is reported but never fails the command (exit `0`); with
 it, an incomplete body fails (exit `3`) — the same report-only-before-
 blocking rollout discipline this platform already applies to its CI gate
 and security scan. See `specs/007-change-note-capture/research.md` D2 for
-the exact `Jira: KEY`/`Jira: None` text convention recognized.
+the exact `Jira: KEY`/`Jira: None` text convention recognized. When
+`--repo-dir`/`--base`/`--head` are all supplied, `notes check` also
+computes the real migration flag and cross-checks it against an optional
+`Migrations: none|expand|contract` PR-body line, failing (exit `3`) on a
+real mismatch; the line is a cross-check only, so its absence always
+passes regardless of the computed value, and omitting all three options
+preserves the Jira-only behaviour exactly as before
+(`specs/017-migration-flag-computation/research.md` D5).
 
 `release propose` reads already-written change-note records from a local
 directory (the same layout `notes write --out-dir` produces), filters
