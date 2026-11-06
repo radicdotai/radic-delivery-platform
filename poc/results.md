@@ -50,4 +50,4 @@ Sandbox: `radicdotai/operations-console-cdpoc` (private copy of operations-conso
 Baseline of 40 real services taken before apply. At the end no real service was changed by a `cdpoc-*`
 identity. Three were changed during the PoC by the operator account via `gcloud run services update`
 (operations-console, radic-brand-research-prod, radic-image-studio-prod in `radicai`, 08:10–08:12 UTC) —
-not by the PoC tooling; to be confirmed by the account owner.
+not by the PoC tooling; the account owner confirmed these were their own manual changes.
