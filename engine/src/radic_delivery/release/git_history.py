@@ -218,6 +218,23 @@ def changed_paths(repo_dir: Path, base: str, head: str) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def added_paths(repo_dir: Path, base: str, head: str) -> set[str]:
+    """Paths genuinely added between `base` and `head` — unlike
+    `changed_paths`, a modified or deleted file is never included
+    (specs/017 research.md D2)."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=A", base, head],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise GitHistoryError(f"could not diff '{base}'..'{head}' in {repo_dir}: {exc}") from exc
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def list_branches(repo_dir: Path, pattern: str) -> list[str]:
     try:
         result = subprocess.run(
