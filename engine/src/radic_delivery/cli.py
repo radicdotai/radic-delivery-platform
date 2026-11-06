@@ -533,6 +533,12 @@ def release_cut(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Validate and resolve everything without touching the repo or the manifest."
     ),
+    other_manifests: str | None = typer.Option(
+        None,
+        "--other-manifests",
+        help="Comma-separated paths to other already-known manifests for this service "
+        "(specs/018); refuses the cut if any is still open.",
+    ),
     format: OutputFormat = FormatOption,
 ) -> None:
     """Create release/<id> from main and cherry-pick the manifest's
@@ -544,6 +550,11 @@ def release_cut(
     manifest behind on failure.
     """
     manifest = json.loads(manifest_path.read_text())
+    loaded_other_manifests = (
+        [json.loads(Path(p.strip()).read_text()) for p in other_manifests.split(",") if p.strip()]
+        if other_manifests
+        else None
+    )
 
     try:
         result = cut_release(
@@ -553,6 +564,7 @@ def release_cut(
             release_id=release_id,
             hotfix=hotfix,
             dry_run=dry_run,
+            other_manifests=loaded_other_manifests,
         )
     except GitHistoryError as exc:
         payload = {"ok": False, "error": str(exc)}

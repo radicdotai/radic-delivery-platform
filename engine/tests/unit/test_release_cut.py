@@ -328,3 +328,102 @@ def test_present_change_note_records_do_not_block(repo: Path, tmp_path: Path) ->
         dry_run=False,
     )
     assert result.ok is True
+
+
+# --- US1 (specs/018): cut-time open-release guard ----------------------------
+
+
+def _other_manifest(*, release_id: str, repo: str = REPO, status: str) -> dict:
+    return {"release_id": release_id, "repo": repo, "status": status}
+
+
+def _cut_with_others(
+    repo: Path, notes_dir: Path, sha: str, *, other_manifests: list[dict] | None
+):
+    manifest = _manifest(shas=[sha])
+    return cut(
+        manifest,
+        repo_dir=repo,
+        change_notes_dir=notes_dir,
+        release_id="2026.11.03-1",
+        hotfix=False,
+        dry_run=False,
+        other_manifests=other_manifests,
+    )
+
+
+def test_an_open_other_manifest_for_the_same_repo_refuses_before_any_branch(
+    repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_a = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha_a)
+
+    other = _other_manifest(release_id="2026.11.01-1", status="stage-verified")
+    result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=[other])
+
+    assert result.ok is False
+    assert result.reason == "release_already_open"
+    assert "2026.11.01-1" in result.detail
+    assert "stage-verified" in result.detail
+    assert _git(repo, "branch", "--list", "release/*") == ""
+
+
+@pytest.mark.parametrize("status", ["finalised", "aborted", "failed"])
+def test_a_closed_other_manifest_does_not_block(repo: Path, tmp_path: Path, status: str) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_a = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha_a)
+
+    other = _other_manifest(release_id="2026.11.01-1", status=status)
+    result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=[other])
+
+    assert result.ok is True
+
+
+def test_an_open_other_manifest_for_a_different_repo_does_not_block(
+    repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_a = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha_a)
+
+    other = _other_manifest(release_id="2026.11.01-1", repo="radicdotai/frontend-v2", status="stage-verified")
+    result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=[other])
+
+    assert result.ok is True
+
+
+@pytest.mark.parametrize("other_manifests", [None, []])
+def test_no_other_manifests_is_identical_to_pre_feature_behaviour(
+    repo: Path, tmp_path: Path, other_manifests: list[dict] | None
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_a = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha_a)
+
+    result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=other_manifests)
+    assert result.ok is True
+
+
+def test_an_other_manifest_with_the_same_release_id_never_blocks_itself(
+    repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_a = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha_a)
+
+    other = _other_manifest(release_id="2026.11.03-1", status="stage-verified")
+    result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=[other])
+
+    assert result.ok is True

@@ -10,6 +10,7 @@ CutReason = Literal[
     "hotfix_mismatch",
     "status_mismatch",
     "missing_change_note",
+    "release_already_open",
     "cherry_pick_conflict",
     "git_error",
 ]

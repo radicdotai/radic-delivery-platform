@@ -255,7 +255,16 @@ actually attempting the cherry-pick. This is the first feature with no
 external-dependency boundary at all: every behaviour, including the
 conflict-abort path, is exercised against a real local git repository.
 See `specs/009-release-cut/research.md` for the exact rollback steps and
-exit-code mapping.
+exit-code mapping. **`--other-manifests`** (comma-separated local manifest
+file paths, `specs/018-cut-time-open-release-guard`) names every other
+already-known manifest for this service; the cut refuses outright —
+`reason: "release_already_open"`, before any branch is created — if any
+of them shares this manifest's `repo` (a different repo never blocks),
+has a different `release_id` (a manifest can't block itself), and has a
+status that isn't yet `finalised`/`aborted`/`failed`. Discovering the real
+set of other manifests remains the calling workflow's job (a live
+`delivery-records` lookup this sandbox cannot make); omitted, this option
+changes nothing about `release cut`'s existing behaviour.
 
 `records put-test-result` reads a complete test-result record from a file,
 validates it against a now-corrected `schemas/test-result.schema.json`
