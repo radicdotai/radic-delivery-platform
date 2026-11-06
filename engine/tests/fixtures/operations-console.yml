@@ -17,7 +17,7 @@ build:
   env_agnostic: true
   image:
     registry: us-central1-docker.pkg.dev
-    repository: radic-operations-console
+    repository: operations-console
     name: operations-console
 environments:
   dev:

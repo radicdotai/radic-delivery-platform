@@ -112,8 +112,30 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["driver", "skaffold_file", "planes", "deployables"],
+      "if": { "properties": { "sandbox": { "const": true } }, "required": ["sandbox"] },
+      "then": {
+        "properties": {
+          "deployables": {
+            "items": {
+              "properties": {
+                "name": { "pattern": "-cdpoc$" },
+                "pipelines": {
+                  "properties": {
+                    "dev": { "pattern": "-cdpoc-dev$" },
+                    "rel": { "pattern": "-cdpoc-rel$" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": { "planes": { "properties": { "release": { "const": "radicai-production" } } } }
+      },
       "properties": {
         "driver": { "const": "cloud-deploy" },
+        "sandbox": { "type": "boolean", "default": false },
         "skaffold_file": { "type": "string", "default": "deploy/skaffold.yaml" },
         "planes": {
           "type": "object",
@@ -121,7 +143,7 @@
           "required": ["dev", "release"],
           "properties": {
             "dev": { "const": "radicai" },
-            "release": { "const": "radicai-production" }
+            "release": { "enum": ["radicai-production", "radicai"] }
           }
         },
         "deployables": {

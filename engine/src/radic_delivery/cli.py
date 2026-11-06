@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from collections.abc import Callable
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -19,7 +21,17 @@ from typing import Any, Literal
 import typer
 
 from radic_delivery.cleanup.branches import cleanup_branches
+from radic_delivery.deploy.cloud_deploy import (
+    CloudDeploy,
+    DeployResult,
+    InvalidInput,
+    Target,
+    resolve_target,
+)
+from radic_delivery.deploy.drift import drift as drift_check
+from radic_delivery.deploy.gcloud import GcloudError, SubprocessGcloud
 from radic_delivery.deploy.linter import lint as lint_deploy
+from radic_delivery.deploy.naming import NamingError
 from radic_delivery.deploy.result import DeployLintResult
 from radic_delivery.descriptor.resolver import resolve as resolve_descriptor
 from radic_delivery.descriptor.schema_loader import load_service_schema
@@ -317,27 +329,148 @@ def deploy_lint(
     raise typer.Exit(code=int(ExitCode.OK if result.overall == "pass" else ExitCode.INVALID_INPUT))
 
 
-_DEPLOY_NOT_IMPLEMENTED = ["release", "promote", "approve", "rollback", "status", "drift"]
+DescriptorOption = typer.Option(Path(".radic/service.yml"), "--descriptor", help="Service descriptor.")
+DeployableOption = typer.Option(None, "--deployable", help="Required when there are several.")
+TimeoutOption = typer.Option(900, "--timeout", help="Seconds to wait for the rollout.")
 
 
-def _make_deploy_stub(subcommand_name: str) -> Any:
-    def _stub(ctx: typer.Context) -> None:
-        typer.echo(
-            f"'deploy {subcommand_name}' is a planned subcommand (see the approved architecture) "
-            "that is not implemented yet by this feature — it would call real Cloud Deploy.",
-            err=True,
-        )
-        raise typer.Exit(code=NOT_IMPLEMENTED_EXIT_CODE)
-
-    return _stub
+class DeployEnv(StrEnum):
+    dev = "dev"
+    stage = "stage"
+    prod = "prod"
 
 
-for _subcommand_name in _DEPLOY_NOT_IMPLEMENTED:
-    deploy_app.command(
-        name=_subcommand_name,
-        help=f"(not implemented yet) deploy {_subcommand_name}.",
-        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    )(_make_deploy_stub(_subcommand_name))
+def _deploy_target(descriptor: Path, env: DeployEnv, deployable: str | None, format: OutputFormat) -> Target:
+    validation = validate_descriptor(descriptor)
+    if not validation.ok:
+        _emit_validation_result(format, validation)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT))
+    assert validation.document is not None
+    try:
+        repo_root = descriptor.resolve().parent.parent
+        return resolve_target(validation.document, repo_root, env.value, deployable)
+    except InvalidInput as exc:
+        typer.echo(f"INVALID: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT)) from exc
+
+
+def _run_deploy(format: OutputFormat, action: Callable[[], DeployResult]) -> None:
+    started = time.monotonic()
+    try:
+        result = action()
+    except (InvalidInput, NamingError) as exc:
+        typer.echo(f"INVALID: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.INVALID_INPUT)) from exc
+    except GcloudError as exc:
+        _emit(format, {"outcome": "fail", "error": str(exc)}, [f"ERROR: {exc}"])
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+    result.duration_seconds = time.monotonic() - started
+    payload = result.to_dict()
+    text_lines = [
+        f"{result.command} {payload['outcome'].upper()}: {result.target.target} release={result.release} "
+        f"rollout={result.rollout} state={result.state} serving={result.serving_digest}"
+    ]
+    _emit(format, payload, text_lines)
+    raise typer.Exit(code=int(ExitCode.OK if result.passed else ExitCode.POLICY_FAILURE))
+
+
+def _cloud_deploy() -> CloudDeploy:
+    return CloudDeploy(SubprocessGcloud())
+
+
+@deploy_app.command("release")
+def deploy_release(
+    env: DeployEnv = typer.Option(..., "--env"),
+    image: str = typer.Option(..., "--image", help="<registry>/<project>/<repo>/<name>@sha256:<digest>"),
+    commit: str = typer.Option(..., "--commit"),
+    run_number: int | None = typer.Option(None, "--run-number"),
+    release_id: str | None = typer.Option(None, "--release-id"),
+    run_url: str = typer.Option("", "--run-url"),
+    initiator: str = typer.Option("unknown", "--initiator"),
+    timeout: int = TimeoutOption,
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Create a Cloud Deploy release by digest and wait for its first rollout."""
+    t = _deploy_target(descriptor, env, deployable, format)
+    args = (image, commit, run_number, release_id, run_url, initiator, timeout)
+    _run_deploy(format, lambda: _cloud_deploy().release(t, *args))
+
+
+@deploy_app.command("promote")
+def deploy_promote(
+    release: str = typer.Option(..., "--release"),
+    timeout: int = TimeoutOption,
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Promote a release to prod and stop at PENDING_APPROVAL (never approves)."""
+    t = _deploy_target(descriptor, DeployEnv.prod, deployable, format)
+    _run_deploy(format, lambda: _cloud_deploy().promote(t, release, timeout))
+
+
+@deploy_app.command("approve")
+def deploy_approve(
+    release: str = typer.Option(..., "--release"),
+    rollout: str = typer.Option(..., "--rollout"),
+    timeout: int = TimeoutOption,
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Approve a pending prod rollout and wait for it to succeed."""
+    t = _deploy_target(descriptor, DeployEnv.prod, deployable, format)
+    _run_deploy(format, lambda: _cloud_deploy().approve(t, release, rollout, timeout))
+
+
+@deploy_app.command("rollback")
+def deploy_rollback(
+    env: DeployEnv = typer.Option(..., "--env"),
+    release: str | None = typer.Option(None, "--release"),
+    expect_digest: str | None = typer.Option(None, "--expect-digest"),
+    timeout: int = TimeoutOption,
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Roll a target back to the previous (or named) release."""
+    t = _deploy_target(descriptor, env, deployable, format)
+    _run_deploy(format, lambda: _cloud_deploy().rollback(t, release, expect_digest, timeout))
+
+
+@deploy_app.command("status")
+def deploy_status(
+    env: DeployEnv = typer.Option(..., "--env"),
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Read-only: is the target Ready on the last successful rollout's digest."""
+    t = _deploy_target(descriptor, env, deployable, format)
+    _run_deploy(format, lambda: _cloud_deploy().status(t))
+
+
+@deploy_app.command("drift")
+def deploy_drift(
+    env: DeployEnv = typer.Option(..., "--env"),
+    descriptor: Path = DescriptorOption,
+    deployable: str | None = DeployableOption,
+    format: OutputFormat = FormatOption,
+) -> None:
+    """Read-only: compare the live service with the last rendered manifest."""
+    t = _deploy_target(descriptor, env, deployable, format)
+    gcloud = SubprocessGcloud()
+    try:
+        payload = drift_check(gcloud, CloudDeploy(gcloud), t)
+    except GcloudError as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.INFRA_ERROR)) from exc
+    lines = [f"drift {payload['outcome'].upper()}: {t.target} ({len(payload['differences'])} difference(s))"]
+    lines += [f"  {d['field']}" for d in payload["differences"]]
+    _emit(format, payload, lines)
+    raise typer.Exit(code=int(ExitCode.OK if payload["outcome"] == "pass" else ExitCode.POLICY_FAILURE))
 
 
 # --- release -------------------------------------------------------------

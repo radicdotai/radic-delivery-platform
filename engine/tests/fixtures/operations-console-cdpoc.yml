@@ -1,0 +1,115 @@
+schema_version: 1
+service:
+  name: operations-console
+  kind: console
+  owner: platform-maintainers
+  channel: canary
+repo:
+  slug: radicdotai/operations-console-cdpoc
+  trunk: dev
+runtime:
+  template: node
+  version: '20'
+  framework: Next.js 16.2
+  package_manager: npm
+build:
+  dockerfile: Dockerfile
+  env_agnostic: true
+  image:
+    registry: us-central1-docker.pkg.dev
+    repository: ops-console-cdpoc
+    name: operations-console
+environments:
+  dev:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: ops-console-cdpoc-dev
+    deployer_service_account: cdpoc-rel-dev@radicai.iam.gserviceaccount.com
+    health:
+      url: https://ops-console-cdpoc-dev.invalid/
+      mode: gcloud-ready
+      timeout_seconds: 300
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: delivery-platform/poc-1
+  stage:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: ops-console-cdpoc-stage
+    deployer_service_account: cdpoc-rel-stage@radicai.iam.gserviceaccount.com
+    health:
+      url: https://ops-console-cdpoc-stage.invalid/
+      mode: gcloud-ready
+      timeout_seconds: 300
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: delivery-platform/poc-1
+  prod:
+    gcp_project: radicai
+    region: us-central1
+    cloud_run_service: ops-console-cdpoc-prod
+    deployer_service_account: cdpoc-rel-stage@radicai.iam.gserviceaccount.com
+    health:
+      url: https://ops-console-cdpoc-prod.invalid/
+      mode: gcloud-ready
+      timeout_seconds: 300
+      fail_on_timeout: true
+    state:
+      bucket: radicai-terraform-state-dev
+      prefix: delivery-platform/poc-1
+cloud_deploy:
+  driver: cloud-deploy
+  skaffold_file: deploy/skaffold.yaml
+  planes:
+    dev: radicai
+    release: radicai
+  deployables:
+  - name: ops-console-cdpoc
+    kind: service
+    pipelines:
+      dev: ops-console-cdpoc-dev
+      rel: ops-console-cdpoc-rel
+    service_yaml:
+      dev: deploy/run/dev.yaml
+      stage: deploy/run/stage.yaml
+      prod: deploy/run/prod.yaml
+    health:
+      path: /
+      mode: gcloud-ready
+    require_approval:
+      prod: true
+    parity:
+      allow:
+      - service_name
+  sandbox: true
+quality:
+  lint:
+    tool: eslint
+  typecheck:
+    tool: tsc
+    blocking: true
+  unit:
+    runner: vitest
+  coverage_floor:
+    statements: 55
+    branches: 80
+    functions: 70
+    lines: 55
+    per_file_check: vitest-thresholds
+  skip_budget: 0
+  post_deploy:
+    suites:
+    - name: e2e-regression
+      runner: playwright
+      target: e2e/regression
+      environments:
+      - dev
+      - stage
+      needs_auth_emulator: false
+release:
+  tag_scheme: semver
+  promotion:
+    verify: ancestry+tree+tag
+  jira_project: RAD

@@ -55,10 +55,3 @@ def test_json_and_text_formats_report_the_same_overall_result() -> None:
     )
     payload = json.loads(json_result.stdout)
     assert payload["overall"].upper() in text_result.stdout
-
-
-def test_deploy_release_subcommand_is_not_implemented() -> None:
-    from radic_delivery.exit_codes import NOT_IMPLEMENTED_EXIT_CODE
-
-    result = runner.invoke(app, ["deploy", "release"])
-    assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE

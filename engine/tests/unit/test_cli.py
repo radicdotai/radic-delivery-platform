@@ -56,21 +56,10 @@ def test_json_and_text_formats_report_the_same_facts() -> None:
     assert json_payload["status"] in text_result.stdout
 
 
-def test_not_implemented_command_group_has_distinct_exit_code() -> None:
-    """spec Edge Case / FR-003: not-yet-implemented commands are not success,
-    not a crash, and not confused with the four real exit codes.
-
-    `gate` was this feature's original example, then `notes`
-    (specs/002-ci-gate-workflow, specs/007-change-note-capture), then
-    `tests` (specs/012-ci-tooling-completion), then `migrations`
-    (specs/013-quality-gate-completion) — after which no entire top-level
-    command GROUP remains unimplemented; this now targets `deploy
-    promote`, a still-stubbed *subcommand* within the otherwise-real
-    `deploy` group (the six `deploy` subcommands that call real Cloud
-    Deploy are the only genuinely-unimplemented CLI surface left)."""
-    result = runner.invoke(app, ["deploy", "promote"])
-    assert result.exit_code == NOT_IMPLEMENTED_EXIT_CODE
-    assert result.exit_code not in {int(c) for c in ExitCode}
+def test_no_deploy_subcommand_is_a_stub() -> None:
+    for sub in ("release", "promote", "approve", "rollback", "status", "drift"):
+        result = runner.invoke(app, ["deploy", sub])
+        assert result.exit_code != NOT_IMPLEMENTED_EXIT_CODE, sub
 
 
 def test_help_lists_every_architecture_command_group() -> None:
