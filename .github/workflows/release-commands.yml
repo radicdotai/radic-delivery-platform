@@ -10,7 +10,7 @@ name: release-commands
 # specs/006-release-commands-workflow implements this contract. It does
 # NOT mutate any release-manifest state for an "applied" command (that
 # command group remains unimplemented — see engine/README.md), does NOT
-# write to the platform's durable audit trail (`delivery-records`, a
+# write to the platform's durable audit trail (`radic-delivery-records`, a
 # separate, not-yet-built system), and does NOT call Jira despite the
 # ATLASSIAN_* secrets below being declared per the architecture's contract
 # — they are threaded through exactly as specified, unused by any real

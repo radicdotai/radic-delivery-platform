@@ -3,7 +3,7 @@
 structure exactly (research.md D2). A release-less (dev) record is
 written under a fixed `dev` segment in place of `<id>`.
 
-The real `radicdotai/delivery-records` upload is out of scope — reported
+The real `radicdotai/radic-delivery-records` upload is out of scope — reported
 `not_available` by the caller, never attempted here.
 """
 

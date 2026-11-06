@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/radicdotai/delivery-platform/schemas/release-manifest.schema.json",
   "title": "Release Manifest (releases/ID.yaml)",
-  "description": "Shape of releases/<id>.yaml in radicdotai/delivery-records, as validated and written (status: proposed only) by `radic-delivery release propose` (specs/008-release-propose). approvals/digests/gates/cloud_deploy are optional here since they are populated only by later pipeline stages (release cut, prod approval, Cloud Deploy) this platform has not built yet (research.md D1).",
+  "description": "Shape of releases/<id>.yaml in radicdotai/radic-delivery-records, as validated and written (status: proposed only) by `radic-delivery release propose` (specs/008-release-propose). approvals/digests/gates/cloud_deploy are optional here since they are populated only by later pipeline stages (release cut, prod approval, Cloud Deploy) this platform has not built yet (research.md D1).",
   "type": "object",
   "additionalProperties": false,
   "required": [

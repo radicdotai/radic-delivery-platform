@@ -228,7 +228,7 @@ opts in pull requests merged without a Jira key; an unlisted one never
 appears anywhere, listed-but-not-found ones are reported distinctly.
 Without `--dry-run`, the manifest is also written locally under
 `<out-dir>/releases/<release_id>.json` — never to the real
-`radicdotai/delivery-records` repository, which this feature does not
+`radicdotai/radic-delivery-records` repository, which this feature does not
 touch. See `specs/008-release-propose/data-model.md` for the full
 manifest shape and `research.md` D1 for the schema corrections this
 feature made (the architecture's own release-manifest schema, as
@@ -282,7 +282,7 @@ release-gate`'s own `stage_regression` check now reads — see
 carry a real release identifier and declare itself as the full test
 scope. When both
 `--release-id` and the record's own `release_id` are present, they must
-match exactly. The real `radicdotai/delivery-records` upload is not
+match exactly. The real `radicdotai/radic-delivery-records` upload is not
 implemented; the result always reports `upload_status: "not_available"`.
 See `specs/010-test-result-capture/data-model.md` for the full record
 shape and `research.md` D1 for the schema corrections this feature made.
