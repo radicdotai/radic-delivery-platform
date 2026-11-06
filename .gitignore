@@ -226,3 +226,4 @@ __marimo__/
 *.tfstate
 *.tfstate.*
 *.tfplan
+poc/baseline.txt
