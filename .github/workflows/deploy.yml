@@ -61,7 +61,7 @@ jobs:
         with:
           enable-cache: false
 
-      - uses: ./.platform/actions/setup-security-tools
+      - uses: ./.platform/actions/setup-security-tools  # zizmor: ignore[self-repository] .platform is the platform checkout at job_workflow_sha, not the caller repo
 
       - name: Validate and lint
         env:
