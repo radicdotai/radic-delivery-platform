@@ -72,6 +72,14 @@ resource "google_artifact_registry_repository_iam_member" "build_writer" {
   member     = google_service_account.duty["build"].member
 }
 
+resource "google_artifact_registry_repository_iam_member" "exec_reader" {
+  for_each   = local.envs
+  location   = local.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.reader"
+  member     = google_service_account.exec[each.key].member
+}
+
 resource "google_storage_bucket" "source" {
   name                        = local.bucket
   location                    = "US-CENTRAL1"
@@ -242,9 +250,17 @@ resource "google_clouddeploy_delivery_pipeline_iam_member" "duty" {
 }
 
 resource "google_project_iam_custom_role" "operations_reader" {
-  role_id     = "cdpocDeployOperationsReader"
-  title       = "PoC-1 Cloud Deploy operation reader"
-  permissions = ["clouddeploy.operations.get"]
+  role_id = "cdpocDeployOperationsReader"
+  title   = "PoC-1 Cloud Deploy read-only"
+  permissions = [
+    "clouddeploy.operations.get",
+    "clouddeploy.deliveryPipelines.get",
+    "clouddeploy.targets.get",
+    "clouddeploy.releases.get",
+    "clouddeploy.releases.list",
+    "clouddeploy.rollouts.get",
+    "clouddeploy.rollouts.list",
+  ]
 }
 
 resource "google_project_iam_member" "operations_reader" {
