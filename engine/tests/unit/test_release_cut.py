@@ -427,3 +427,139 @@ def test_an_other_manifest_with_the_same_release_id_never_blocks_itself(
     result = _cut_with_others(repo, notes_dir, sha_a, other_manifests=[other])
 
     assert result.ok is True
+
+
+# --- US2 (specs/019): Depends-on confirming guard ----------------------------
+
+
+def _write_note_with_depends_on(notes_dir: Path, sha: str, jira_key: str, depends_on: list[str]) -> None:
+    path = notes_dir / "change-notes" / REPO / f"{sha}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo": REPO,
+                "sha": sha,
+                "type": "fix",
+                "audience": "customer",
+                "title": "A title",
+                "summary": "A summary.",
+                "jira_key": jira_key,
+                "depends_on": depends_on,
+            }
+        )
+    )
+
+
+def _manifest_with_tickets(tickets: list[dict], *, release_id: str = "2026.11.03-1") -> dict:
+    all_shas = [c["dev_sha"] for t in tickets for c in t["commits"]]
+    return {
+        "schema_version": 1,
+        "release_id": release_id,
+        "kind": "release",
+        "status": "proposed",
+        "repo": REPO,
+        "created_at": "2026-11-03T00:00:00Z",
+        "initiator": "alice",
+        "base": {"branch": "dev", "sha": all_shas[-1] if all_shas else "0" * 40},
+        "selection": {"tickets": tickets, "held_back": [], "non_jira_prs": []},
+    }
+
+
+def test_unmet_dependency_refuses_before_any_branch(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note_with_depends_on(notes_dir, sha, "RAD-12", depends_on=["RAD-11"])
+
+    manifest = _manifest_with_tickets(
+        [{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}]
+    )
+    result = cut(
+        manifest,
+        repo_dir=repo,
+        change_notes_dir=notes_dir,
+        release_id="2026.11.03-1",
+        hotfix=False,
+        dry_run=False,
+    )
+
+    assert result.ok is False
+    assert result.reason == "unmet_dependency"
+    assert "RAD-12" in result.detail
+    assert "RAD-11" in result.detail
+    assert _git(repo, "branch", "--list", "release/*") == ""
+
+
+def test_dependency_already_in_the_selection_does_not_block(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha_11 = _write_and_commit(repo, "a.txt", "1", "first")
+    sha_12 = _write_and_commit(repo, "b.txt", "2", "second")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note_with_depends_on(notes_dir, sha_11, "RAD-11", depends_on=[])
+    _write_note_with_depends_on(notes_dir, sha_12, "RAD-12", depends_on=["RAD-11"])
+
+    manifest = _manifest_with_tickets(
+        [
+            {"key": "RAD-11", "origin": "bot-proposal", "commits": [{"dev_sha": sha_11}]},
+            {"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha_12}]},
+        ]
+    )
+    result = cut(
+        manifest,
+        repo_dir=repo,
+        change_notes_dir=notes_dir,
+        release_id="2026.11.03-1",
+        hotfix=False,
+        dry_run=False,
+    )
+
+    assert result.ok is True
+
+
+def test_dependency_supplied_as_known_prod_ticket_does_not_block(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note_with_depends_on(notes_dir, sha, "RAD-12", depends_on=["RAD-11"])
+
+    manifest = _manifest_with_tickets(
+        [{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}]
+    )
+    result = cut(
+        manifest,
+        repo_dir=repo,
+        change_notes_dir=notes_dir,
+        release_id="2026.11.03-1",
+        hotfix=False,
+        dry_run=False,
+        known_prod_tickets=["RAD-11"],
+    )
+
+    assert result.ok is True
+
+
+def test_ticket_depending_on_itself_is_never_unsatisfied(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+    notes_dir = tmp_path / "notes"
+    _write_note_with_depends_on(notes_dir, sha, "RAD-12", depends_on=["RAD-12"])
+
+    manifest = _manifest_with_tickets(
+        [{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}]
+    )
+    result = cut(
+        manifest,
+        repo_dir=repo,
+        change_notes_dir=notes_dir,
+        release_id="2026.11.03-1",
+        hotfix=False,
+        dry_run=False,
+    )
+
+    assert result.ok is True

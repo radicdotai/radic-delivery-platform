@@ -58,6 +58,69 @@ def test_release_gate_mode_without_results_dir_fails_cleanly() -> None:
     assert stage_check["status"] == "not_executable"
 
 
+def test_release_gate_with_manifest_evaluates_prereqs_and_depends_on(tmp_path: Path) -> None:
+    repo = "radicdotai/sample"
+    sha = "1" * 40
+    notes_dir = tmp_path / "notes"
+    note_path = notes_dir / "change-notes" / repo / f"{sha}.json"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo": repo,
+                "sha": sha,
+                "type": "fix",
+                "audience": "customer",
+                "title": "A title",
+                "summary": "...",
+                "jira_key": "RAD-12",
+                "prereqs": [{"item": "flag created", "done": True}],
+                "depends_on": ["RAD-11"],
+            }
+        )
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "release_id": "2026.11.03-1",
+                "kind": "release",
+                "status": "proposed",
+                "repo": repo,
+                "created_at": "2026-11-03T00:00:00Z",
+                "initiator": "alice",
+                "base": {"branch": "dev", "sha": sha},
+                "selection": {
+                    "tickets": [
+                        {"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}
+                    ],
+                    "held_back": [],
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "gate", "evaluate",
+            "--descriptor", _descriptor("python-sample"),
+            "--mode", "release-gate",
+            "--manifest", str(manifest_path),
+            "--change-notes-dir", str(notes_dir),
+            "--known-prod-tickets", "RAD-11",
+            "--format", "json",
+        ],
+    )
+    payload = json.loads(result.stdout)
+    prereqs_check = next(c for c in payload["checks"] if c["name"] == "prereqs")
+    depends_on_check = next(c for c in payload["checks"] if c["name"] == "depends_on")
+    assert prereqs_check["status"] == "pass"
+    assert depends_on_check["status"] == "pass"
+
+
 def test_json_and_text_formats_report_the_same_overall_result() -> None:
     json_result = runner.invoke(
         app, ["gate", "evaluate", "--descriptor", _descriptor("python-sample"), "--format", "json"]

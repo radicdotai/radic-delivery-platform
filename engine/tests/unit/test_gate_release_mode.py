@@ -179,3 +179,140 @@ def test_release_gate_reuses_ci_gate_checks_identically() -> None:
     ci_checks = {c.name: c.status for c in ci_gate_result.checks if c.name in shared_names}
     release_checks = {c.name: c.status for c in release_gate_result.checks if c.name in shared_names}
     assert ci_checks == release_checks
+
+
+# --- US3 (specs/019): Prereqs and Depends-on checks ---------------------------
+
+REPO = "radicdotai/web-bff"
+
+
+def _write_change_note(
+    notes_dir: Path, sha: str, *, prereqs: list[dict] | None = None, depends_on: list[str] | None = None
+) -> None:
+    path = notes_dir / "change-notes" / REPO / f"{sha}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo": REPO,
+                "sha": sha,
+                "type": "fix",
+                "audience": "customer",
+                "title": "A title",
+                "summary": "...",
+                "jira_key": "RAD-12",
+                "prereqs": prereqs or [],
+                "depends_on": depends_on or [],
+            }
+        )
+    )
+
+
+def _manifest(tickets: list[dict]) -> dict:
+    return {
+        "schema_version": 1,
+        "release_id": "2026.11.03-1",
+        "kind": "release",
+        "status": "proposed",
+        "repo": REPO,
+        "created_at": "2026-11-03T00:00:00Z",
+        "initiator": "alice",
+        "base": {"branch": "dev", "sha": "0" * 40},
+        "selection": {"tickets": tickets, "held_back": [], "non_jira_prs": []},
+    }
+
+
+def test_omitting_manifest_adds_no_new_checks_no_regression(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+
+    result = _run_release_gate(results_dir, _DIGEST)
+
+    assert {c.name for c in result.checks} == {
+        "lint", "typecheck", "unit", "coverage", "skip_budget", "stage_regression",
+    }
+    assert result.overall == "pass"
+
+
+def test_unticked_prereq_fails_naming_the_ticket_and_item(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+    notes_dir = tmp_path / "notes"
+    sha = "1" * 40
+    _write_change_note(notes_dir, sha, prereqs=[{"item": "flag created", "done": False}])
+    manifest = _manifest([{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}])
+
+    result = _run_release_gate(results_dir, _DIGEST, manifest=manifest, change_notes_dir=notes_dir)
+
+    prereqs_check = next(c for c in result.checks if c.name == "prereqs")
+    assert prereqs_check.status == "fail"
+    assert "RAD-12" in prereqs_check.detail
+    assert "flag created" in prereqs_check.detail
+    assert result.overall == "fail"
+
+
+def test_unmet_dependency_fails_naming_the_ticket_and_dependency(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+    notes_dir = tmp_path / "notes"
+    sha = "1" * 40
+    _write_change_note(notes_dir, sha, depends_on=["RAD-11"])
+    manifest = _manifest([{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}])
+
+    result = _run_release_gate(results_dir, _DIGEST, manifest=manifest, change_notes_dir=notes_dir)
+
+    depends_on_check = next(c for c in result.checks if c.name == "depends_on")
+    assert depends_on_check.status == "fail"
+    assert "RAD-12" in depends_on_check.detail
+    assert "RAD-11" in depends_on_check.detail
+    assert result.overall == "fail"
+
+
+def test_dependency_satisfied_via_known_prod_tickets_passes(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+    notes_dir = tmp_path / "notes"
+    sha = "1" * 40
+    _write_change_note(notes_dir, sha, depends_on=["RAD-11"])
+    manifest = _manifest([{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}])
+
+    result = _run_release_gate(
+        results_dir, _DIGEST, manifest=manifest, change_notes_dir=notes_dir, known_prod_tickets=["RAD-11"]
+    )
+
+    depends_on_check = next(c for c in result.checks if c.name == "depends_on")
+    assert depends_on_check.status == "pass"
+    assert result.overall == "pass"
+
+
+def test_fully_complete_prereqs_and_dependencies_pass_both_checks(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+    notes_dir = tmp_path / "notes"
+    sha = "1" * 40
+    _write_change_note(notes_dir, sha, prereqs=[{"item": "flag created", "done": True}])
+    manifest = _manifest([{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}])
+
+    result = _run_release_gate(results_dir, _DIGEST, manifest=manifest, change_notes_dir=notes_dir)
+
+    assert next(c for c in result.checks if c.name == "prereqs").status == "pass"
+    assert next(c for c in result.checks if c.name == "depends_on").status == "pass"
+    assert result.overall == "pass"
+
+
+def test_manifest_without_change_notes_dir_reports_not_executable(tmp_path: Path) -> None:
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    _write_stage_record(results_dir / "stage-sample-e2e.json")
+    manifest = _manifest([{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": "1" * 40}]}])
+
+    result = _run_release_gate(results_dir, _DIGEST, manifest=manifest, change_notes_dir=None)
+
+    assert next(c for c in result.checks if c.name == "prereqs").status == "not_executable"
+    assert next(c for c in result.checks if c.name == "depends_on").status == "not_executable"

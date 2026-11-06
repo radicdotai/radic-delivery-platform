@@ -202,6 +202,63 @@ def test_other_manifests_option_refuses_when_one_is_open(repo: Path, tmp_path: P
     assert on_disk["status"] == "proposed"
 
 
+def test_known_prod_tickets_option_satisfies_an_otherwise_unmet_dependency(
+    repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+
+    notes_dir = tmp_path / "notes"
+    note_path = notes_dir / "change-notes" / REPO / f"{sha}.json"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo": REPO,
+                "sha": sha,
+                "type": "fix",
+                "audience": "customer",
+                "title": "A title",
+                "summary": "A summary.",
+                "jira_key": "RAD-1234",
+                "depends_on": ["RAD-9999"],
+            }
+        )
+    )
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path, sha)
+
+    refused = runner.invoke(
+        app,
+        [
+            "release", "cut",
+            "--manifest", str(manifest_path),
+            "--release-id", "2026.11.03-1",
+            "--repo-dir", str(repo),
+            "--change-notes-dir", str(notes_dir),
+            "--format", "json",
+        ],
+    )
+    assert refused.exit_code == int(ExitCode.INVALID_INPUT)
+    assert json.loads(refused.stdout)["reason"] == "unmet_dependency"
+
+    satisfied = runner.invoke(
+        app,
+        [
+            "release", "cut",
+            "--manifest", str(manifest_path),
+            "--release-id", "2026.11.03-1",
+            "--repo-dir", str(repo),
+            "--change-notes-dir", str(notes_dir),
+            "--known-prod-tickets", "RAD-9999",
+            "--format", "json",
+        ],
+    )
+    assert satisfied.exit_code == int(ExitCode.OK)
+
+
 def test_other_manifests_option_omitted_behaves_as_before(repo: Path, tmp_path: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "dev")
     sha = _write_and_commit(repo, "a.txt", "1", "first")

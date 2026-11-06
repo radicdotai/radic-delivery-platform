@@ -192,7 +192,12 @@ the per-repo descriptor fields a later feature wires through for real; see
 `specs/017-migration-flag-computation/research.md` D1-D3 for the resolved
 `# phase: contract` marker convention (correcting a real, flagged
 inconsistency in Confluence's own `-- phase: contract` text, which cannot
-apply to a `.py` migration file).
+apply to a `.py` migration file). Likewise, **`prereqs`/`depends_on` are
+never free CLI input** (`specs/019-prereqs-depends-on`): optional
+`--pr-body-file` computes both from the real PR body's `Prereqs:`
+checklist and `Depends-on:` trailer (Confluence Reference 3 §2, review
+comments C5/C7) — omitted, both stay empty, never requiring a second,
+separately-typed entry of what a human already wrote in the PR body.
 
 `notes check` reads a PR body from a file (never a raw CLI text argument)
 and classifies it as `has_jira_key`, `explicit_none` (the PR body states
@@ -264,7 +269,18 @@ has a different `release_id` (a manifest can't block itself), and has a
 status that isn't yet `finalised`/`aborted`/`failed`. Discovering the real
 set of other manifests remains the calling workflow's job (a live
 `delivery-records` lookup this sandbox cannot make); omitted, this option
-changes nothing about `release cut`'s existing behaviour.
+changes nothing about `release cut`'s existing behaviour. **`--known-prod-
+tickets`** (comma-separated ticket keys, `specs/019-prereqs-depends-on`)
+names tickets already known to be in production; the cut refuses outright
+— `reason: "unmet_dependency"`, before any branch is created — the first
+time a selected ticket's change-note `depends_on` names a key that is
+neither the ticket itself, in the current selection, nor in this list.
+`release cut` only ever *refuses* on an unmet dependency; it never
+auto-adds one to the selection — that would need discovering the missing
+ticket's own commits, a capability that belongs to `release propose`'s
+selector, not `release cut`'s cherry-pick orchestration (a deliberate
+scope correction from this feature's own original plan, recorded in
+`specs/019-prereqs-depends-on/research.md` D3).
 
 `records put-test-result` reads a complete test-result record from a file,
 validates it against a now-corrected `schemas/test-result.schema.json`
@@ -369,7 +385,16 @@ pass cleanly with zero skipped tests. A record for a different digest is
 treated exactly as if no record exists at all. The live Cloud-Deploy-
 rollout-succeeded fact stays `promote`'s own concern, not
 `release-gate`'s — Reference 2 lists them as separate checklist items.
-See `specs/013-quality-gate-completion/research.md` D1-D2.
+See `specs/013-quality-gate-completion/research.md` D1-D2. Two further
+checks, `prereqs` and `depends_on` (`specs/019-prereqs-depends-on`), only
+run at all when `--manifest` is supplied: `prereqs` fails naming the
+specific ticket and item the first time any selected ticket's change-note
+`prereqs` list has an unticked entry; `depends_on` fails naming the
+specific ticket and dependency the first time a `depends_on` key is
+neither in the selection, the ticket's own key, nor in
+`--known-prod-tickets` (comma-separated, a live fact this sandbox cannot
+look up itself). Omitting `--manifest` adds neither check at all — not a
+`not_executable` entry — so no existing `release-gate` caller regresses.
 
 `migrations check` runs `migrations_frozen` (a faithful local port of
 `check_migrations_frozen.py`: for every workflow file the descriptor
@@ -401,7 +426,13 @@ small, optional, explicit `--migrations-chain` input — the same
 "accept it, don't fake it" treatment every other such gap in this
 platform gets. Rendering the same manifest twice always produces
 byte-identical output. See `specs/014-release-cut-workflow/research.md`
-D2.
+D2. A "### Prereqs and dependencies" section (`specs/019-prereqs-
+depends-on`) reports, per selected ticket, a specific ticked/total
+Prereqs count (aggregated across every commit's change-note record for
+that ticket) and its Depends-on tickets by name — never a single yes/no —
+plus a matching Gates checklist bullet reflecting whether every ticket's
+Prereqs are fully ticked and every dependency is satisfied within the
+release's own selection.
 
 `.github/workflows/release-cut.yml` is this platform's fourth reusable
 workflow (after `ci`/`security`/`release-commands`) — a `propose` job

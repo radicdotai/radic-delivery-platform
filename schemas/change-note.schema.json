@@ -36,6 +36,25 @@
       "default": "none",
       "description": "Computed from the diff, never typed by the author: expand/contract when the PR adds a file under migrations/versions/ (migrations/legacy/ excluded), otherwise none (specs/017 research.md D1-D3)."
     },
+    "prereqs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["item", "done"],
+        "properties": {
+          "item": { "type": "string" },
+          "done": { "type": "boolean" }
+        }
+      },
+      "default": [],
+      "description": "Parsed from the PR body's Prereqs: checklist block; every item must be ticked before prod.yml runs (specs/019)."
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z]{2,10}-[0-9]+$" },
+      "default": [],
+      "description": "Parsed from the PR body's optional Depends-on: trailer; tickets that must be in prod or in the same release (specs/019)."
+    },
     "uat_escape": { "type": "boolean" },
     "regression_test_added": {
       "type": "boolean",

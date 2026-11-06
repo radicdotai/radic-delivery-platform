@@ -116,6 +116,23 @@ def test_migration_is_always_computed_from_the_real_diff(repo: Path) -> None:
     assert result.record["author"] == "example-user"
 
 
+def test_pr_body_populates_prereqs_and_depends_on(repo: Path) -> None:
+    pr_body = "Prereqs:\n- [x] flag created\n\nDepends-on: RAD-11\n"
+    result = build_record(**_valid_kwargs(repo), pr_body=pr_body)
+    assert result.ok is True
+    assert result.record is not None
+    assert result.record["prereqs"] == [{"item": "flag created", "done": True}]
+    assert result.record["depends_on"] == ["RAD-11"]
+
+
+def test_omitted_pr_body_leaves_prereqs_and_depends_on_empty(repo: Path) -> None:
+    result = build_record(**_valid_kwargs(repo))
+    assert result.ok is True
+    assert result.record is not None
+    assert result.record["prereqs"] == []
+    assert result.record["depends_on"] == []
+
+
 def test_invalid_linked_pr_reference_is_rejected(repo: Path) -> None:
     kwargs = {**_valid_kwargs(repo), "linked_prs": ["456"]}
     result = build_record(**kwargs)

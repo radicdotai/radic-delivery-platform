@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-CheckName = Literal["lint", "typecheck", "unit", "coverage", "skip_budget", "stage_regression"]
+CheckName = Literal[
+    "lint", "typecheck", "unit", "coverage", "skip_budget", "stage_regression", "prereqs", "depends_on"
+]
 CheckStatus = Literal["pass", "fail", "not_executable", "not_implemented"]
 Mode = Literal["ci-gate", "release-gate"]
 Overall = Literal["pass", "fail", "not_implemented"]

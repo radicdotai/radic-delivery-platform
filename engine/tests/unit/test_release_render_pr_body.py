@@ -334,3 +334,70 @@ def test_cli_out_option_writes_a_real_file(tmp_path: Path) -> None:
     assert result.exit_code == int(ExitCode.OK)
     assert out_path.is_file()
     assert "## Release" in out_path.read_text()
+
+
+# --- US3 (specs/019): Prereqs and dependencies section -----------------------
+
+
+def _write_note_with_prereqs(
+    change_notes_dir: Path, repo: str, sha: str, *, prereqs: list[dict], depends_on: list[str]
+) -> None:
+    path = change_notes_dir / "change-notes" / repo / f"{sha}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repo": repo,
+                "sha": sha,
+                "type": "feature",
+                "audience": "customer",
+                "title": "A title",
+                "summary": "...",
+                "jira_key": "RAD-1234",
+                "prereqs": prereqs,
+                "depends_on": depends_on,
+            }
+        )
+    )
+
+
+def test_prereqs_and_depends_on_section_reports_ticked_total_and_names(tmp_path: Path) -> None:
+    sha = "1" * 40
+    _write_note_with_prereqs(
+        tmp_path,
+        REPO,
+        sha,
+        prereqs=[{"item": "flag created", "done": True}, {"item": "secret set", "done": False}],
+        depends_on=["RAD-11"],
+    )
+    manifest = _manifest(
+        selection={
+            "tickets": [{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}],
+            "held_back": [],
+        }
+    )
+
+    result = render(manifest, change_notes_dir=tmp_path, repo_dir=tmp_path, migrations_chain=[])
+
+    assert "### Prereqs and dependencies" in result.body
+    assert "| RAD-12 | 1 / 2 | RAD-11 |" in result.body
+    assert "- [ ] Every selected ticket has all Prereqs ticked" in result.body
+
+
+def test_fully_complete_prereqs_and_depends_on_ticks_the_gate_bullet(tmp_path: Path) -> None:
+    sha = "1" * 40
+    _write_note_with_prereqs(
+        tmp_path, REPO, sha, prereqs=[{"item": "flag created", "done": True}], depends_on=[]
+    )
+    manifest = _manifest(
+        selection={
+            "tickets": [{"key": "RAD-12", "origin": "bot-proposal", "commits": [{"dev_sha": sha}]}],
+            "held_back": [],
+        }
+    )
+
+    result = render(manifest, change_notes_dir=tmp_path, repo_dir=tmp_path, migrations_chain=[])
+
+    assert "| RAD-12 | 1 / 1 | (none) |" in result.body
+    assert "- [x] Every selected ticket has all Prereqs ticked" in result.body
