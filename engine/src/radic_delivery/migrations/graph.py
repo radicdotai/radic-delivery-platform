@@ -77,7 +77,11 @@ def check_graph(migrations_dir: Path) -> MigrationGraphResult:
             current = revision_to_file.get(down) if down is not None else None
         visited.update(path_so_far)
 
+    orphans = sorted(n for n, (_r, d) in by_file.items() if d is not None and d not in revision_to_file)
+
     detail_parts: list[str] = []
+    if orphans:
+        detail_parts.append(f"Parent revision missing for: {orphans}.")
     if len(roots) == 0:
         detail_parts.append("No root migration (down_revision = None) found.")
     elif len(roots) > 1:
@@ -87,7 +91,7 @@ def check_graph(migrations_dir: Path) -> MigrationGraphResult:
     if cycles:
         detail_parts.append(f"{len(cycles)} cycle(s) found.")
 
-    sound = len(roots) == 1 and not forks and not cycles
+    sound = len(roots) == 1 and not forks and not cycles and not orphans
 
     detail = (
         " ".join(detail_parts)

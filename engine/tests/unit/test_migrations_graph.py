@@ -47,3 +47,13 @@ def test_empty_directory_is_trivially_sound(tmp_path: Path) -> None:
 
     assert result.sound is True
     assert result.root is None
+
+
+def test_held_back_parent_makes_the_chain_unsound(tmp_path: Path) -> None:
+    (tmp_path / "0001_base.py").write_text('revision = "0001"\ndown_revision = None\n')
+    (tmp_path / "0003_backfill.py").write_text('revision = "0003"\ndown_revision = "0002"\n')
+
+    result = check_graph(tmp_path)
+
+    assert result.sound is False
+    assert "0003_backfill.py" in result.detail

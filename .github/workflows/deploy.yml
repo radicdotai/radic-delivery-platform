@@ -1,0 +1,120 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      descriptor:
+        type: string
+        default: .radic/service.yml
+      environment:
+        type: string
+        required: true
+      image_ref:
+        type: string
+        required: true
+      wif_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      migrations_dir:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ github.repository }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] tag pinning is this repo's convention
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Resolve this platform workflow's own commit
+        id: platform
+        run: |
+          token=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=radic-delivery-self" | jq -r .value)
+          payload=$(cut -d. -f2 <<<"$token" | tr '_-' '/+')
+          while (( ${#payload} % 4 )); do payload+="="; done
+          sha=$(base64 -d <<<"$payload" | jq -r .job_workflow_sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "no job_workflow_sha in OIDC token"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] tag pinning is this repo's convention
+        with:
+          repository: radicdotai/radic-delivery-platform
+          ref: ${{ steps.platform.outputs.sha }}
+          path: .platform
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v3  # zizmor: ignore[unpinned-uses] tag pinning is this repo's convention
+        with:
+          enable-cache: false
+
+      - name: Validate and lint
+        env:
+          DESCRIPTOR: ${{ inputs.descriptor }}
+        run: |
+          uv sync --project .platform/engine
+          uv run --project .platform/engine radic-delivery descriptor validate "$DESCRIPTOR"
+          uv run --project .platform/engine radic-delivery deploy lint --descriptor "$DESCRIPTOR"
+
+      - name: Migration chain is whole
+        if: inputs.migrations_dir != ''
+        env:
+          DESCRIPTOR: ${{ inputs.descriptor }}
+          MIGRATIONS_DIR: ${{ inputs.migrations_dir }}
+        run: |
+          uv run --project .platform/engine radic-delivery migrations check --descriptor "$DESCRIPTOR" \
+            --migrations-dir "$MIGRATIONS_DIR" --checks migration_graph --format json | tee migrations.json
+          jq -e '.migration_graph.sound' migrations.json > /dev/null
+
+      - uses: google-github-actions/auth@v2  # zizmor: ignore[unpinned-uses] tag pinning is this repo's convention
+        with:
+          workload_identity_provider: ${{ inputs.wif_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@v2  # zizmor: ignore[unpinned-uses] installs the CLI the engine calls; workflows never call gcloud themselves
+
+      - name: Release and wait
+        env:
+          DESCRIPTOR: ${{ inputs.descriptor }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          INITIATOR: ${{ github.actor }}
+        run: |
+          if [[ "$ENVIRONMENT" == dev ]]; then
+            which=(--run-number "$GITHUB_RUN_NUMBER")
+          else
+            [[ "$REF_NAME" == release/* ]] || { echo "stage deploys only from release/<id>"; exit 2; }
+            which=(--release-id "${REF_NAME#release/}")
+          fi
+          set +e
+          uv run --project .platform/engine radic-delivery deploy release --descriptor "$DESCRIPTOR" \
+            --env "$ENVIRONMENT" --image "$IMAGE_REF" --commit "$GITHUB_SHA" "${which[@]}" \
+            --run-url "$RUN_URL" --initiator "$INITIATOR" --format json > result.json
+          code=$?
+          set -e
+          { echo '### Deploy'; echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      - name: Status
+        env:
+          DESCRIPTOR: ${{ inputs.descriptor }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          uv run --project .platform/engine radic-delivery deploy status --descriptor "$DESCRIPTOR" \
+            --env "$ENVIRONMENT" --format json | tee status.json
+          { echo '### Status'; echo '```json'; cat status.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -136,6 +136,7 @@
       "properties": {
         "driver": { "const": "cloud-deploy" },
         "sandbox": { "type": "boolean", "default": false },
+        "source_bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$" },
         "skaffold_file": { "type": "string", "default": "deploy/skaffold.yaml" },
         "planes": {
           "type": "object",

@@ -154,6 +154,7 @@ def test_dev_release_succeeds_when_serving_digest_matches() -> None:
     assert create[:4] == ["deploy", "releases", "create", "d-aaaaaaa-1"]
     assert f"--images=app={IMAGE}" in create
     assert "--source=/repo/deploy" in create and "--skaffold-file=skaffold.yaml" in create
+    assert "--gcs-source-staging-dir=gs://radicai-cd-source-cdpoc/source" in create
     assert not any(a.startswith("--to-target") for a in create)
 
 

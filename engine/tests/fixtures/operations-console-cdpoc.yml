@@ -84,6 +84,7 @@ cloud_deploy:
       allow:
       - service_name
   sandbox: true
+  source_bucket: radicai-cd-source-cdpoc
 quality:
   lint:
     tool: eslint

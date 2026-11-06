@@ -31,6 +31,7 @@ class Target:
     cloud_run_service: str
     source_dir: Path
     skaffold_file: str
+    source_bucket: str | None = None
 
     def scope(self) -> list[str]:
         return [
@@ -102,6 +103,7 @@ def resolve_target(document: dict[str, Any], repo_root: Path, env: Env, deployab
         cloud_run_service=environment["cloud_run_service"],
         source_dir=repo_root / skaffold.parent,
         skaffold_file=skaffold.name,
+        source_bucket=cd.get("source_bucket"),
     )
 
 
@@ -227,6 +229,8 @@ class CloudDeploy:
             f"--labels={naming.kv_flag(naming.labels(t.service, commit, release_id))}",
             f"--annotations={naming.kv_flag(naming.release_annotations(commit, digest, run_url, initiator))}",
         ]
+        if t.source_bucket:
+            args.append(f"--gcs-source-staging-dir=gs://{t.source_bucket}/source")
         if t.env == "stage":
             args.append(f"--to-target={t.target}")
         self._g.json(args)
