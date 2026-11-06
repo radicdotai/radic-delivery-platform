@@ -168,6 +168,64 @@ def test_cherry_pick_conflict_exits_infra_error_and_manifest_unchanged(repo: Pat
     assert manifest_path.read_bytes() == original_bytes
 
 
+def test_other_manifests_option_refuses_when_one_is_open(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path, sha)
+
+    other_path = tmp_path / "other.json"
+    other_path.write_text(
+        json.dumps({"release_id": "2026.11.01-1", "repo": REPO, "status": "stage-verified"})
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "release", "cut",
+            "--manifest", str(manifest_path),
+            "--release-id", "2026.11.03-1",
+            "--repo-dir", str(repo),
+            "--change-notes-dir", str(notes_dir),
+            "--other-manifests", str(other_path),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == int(ExitCode.INVALID_INPUT)
+    payload = json.loads(result.stdout)
+    assert payload["reason"] == "release_already_open"
+    on_disk = json.loads(manifest_path.read_text())
+    assert on_disk["status"] == "proposed"
+
+
+def test_other_manifests_option_omitted_behaves_as_before(repo: Path, tmp_path: Path) -> None:
+    _git(repo, "checkout", "-q", "-b", "dev")
+    sha = _write_and_commit(repo, "a.txt", "1", "first")
+    _git(repo, "checkout", "-q", "main")
+
+    notes_dir = tmp_path / "notes"
+    _write_note(notes_dir, sha)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path, sha)
+
+    result = runner.invoke(
+        app,
+        [
+            "release", "cut",
+            "--manifest", str(manifest_path),
+            "--release-id", "2026.11.03-1",
+            "--repo-dir", str(repo),
+            "--change-notes-dir", str(notes_dir),
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == int(ExitCode.OK)
+
+
 def test_dry_run_does_not_touch_manifest_or_repo(repo: Path, tmp_path: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "dev")
     sha = _write_and_commit(repo, "a.txt", "1", "first")

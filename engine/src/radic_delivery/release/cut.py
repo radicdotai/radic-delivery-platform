@@ -45,6 +45,22 @@ def _missing_change_note(change_notes_dir: Path, repo: str, sha: str) -> bool:
     return not (change_notes_dir / "change-notes" / repo / f"{sha}.json").is_file()
 
 
+_OPEN_STATUS_EXCLUDED = {"finalised", "aborted", "failed"}
+
+
+def _find_open_blocker(
+    other_manifests: list[dict[str, Any]], *, repo: str, release_id: str
+) -> dict[str, Any] | None:
+    for other in other_manifests:
+        if (
+            other["repo"] == repo
+            and other["release_id"] != release_id
+            and other["status"] not in _OPEN_STATUS_EXCLUDED
+        ):
+            return other
+    return None
+
+
 def cut(
     manifest: dict[str, Any],
     *,
@@ -53,6 +69,7 @@ def cut(
     release_id: str,
     hotfix: bool,
     dry_run: bool,
+    other_manifests: list[dict[str, Any]] | None = None,
 ) -> CutResult:
     if manifest["release_id"] != release_id:
         return _refused(
@@ -90,6 +107,17 @@ def cut(
                 f"commit {sha} has no change-note record under {change_notes_dir}.",
                 dry_run,
                 failed_sha=sha,
+            )
+
+    if other_manifests:
+        blocker = _find_open_blocker(other_manifests, repo=repo, release_id=release_id)
+        if blocker is not None:
+            return _refused(
+                manifest,
+                "release_already_open",
+                f"service already has an open release {blocker['release_id']} "
+                f"(status: {blocker['status']}).",
+                dry_run,
             )
 
     ordered_shas = sorted(all_shas, key=lambda sha: commit_timestamp(repo_dir, sha))
