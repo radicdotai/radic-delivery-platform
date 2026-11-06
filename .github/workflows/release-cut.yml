@@ -20,7 +20,7 @@ name: release-cut
 # and by Technical Design §8's own strict propose-then-cut ordering.
 #
 # research.md D4: the release manifest's real home is the
-# `radicdotai/delivery-records` GitHub repo (read/written directly with
+# `radicdotai/radic-delivery-records` GitHub repo (read/written directly with
 # the bot's own App token), never a live GCS/WIF call — only change-note
 # records are GCS-backed, and fetching those for real remains out of
 # scope (specs/007's own Assumptions already deferred that upload path);
@@ -150,7 +150,7 @@ jobs:
       - name: Checkout delivery-records (research.md D4)
         uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
         with:
-          repository: radicdotai/delivery-records
+          repository: radicdotai/radic-delivery-records
           token: ${{ steps.app_token.outputs.token }}
           path: delivery-records
           # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later
@@ -346,7 +346,7 @@ jobs:
         if: steps.identify.outputs.not_release_pr == 'false'
         uses: actions/checkout@v4  # zizmor: ignore[unpinned-uses] this repo pins third-party actions by tag (see ci.yml/security.yml); hash-pinning is tracked as separate future work, not this feature's scope
         with:
-          repository: radicdotai/delivery-records
+          repository: radicdotai/radic-delivery-records
           token: ${{ steps.app_token.outputs.token }}
           path: delivery-records
           # zizmor: ignore[artipacked] persisted credentials are needed for this job's own later

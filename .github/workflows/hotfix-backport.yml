@@ -89,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           release_id="${HOTFIX_BRANCH#release/}"
-          gh api "repos/radicdotai/delivery-records/contents/releases/${release_id}.yaml" \
+          gh api "repos/radicdotai/radic-delivery-records/contents/releases/${release_id}.yaml" \
             --jq '.content' | base64 -d > manifest.json
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 

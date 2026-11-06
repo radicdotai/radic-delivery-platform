@@ -212,7 +212,7 @@ def render(
         "`/release abort` | `/release waive dev-green reason: text`",
         "",
         "### Links",
-        f"Manifest: radicdotai/delivery-records/releases/{manifest['release_id']}.yaml",
+        f"Manifest: radicdotai/radic-delivery-records/releases/{manifest['release_id']}.yaml",
         f"Cloud Deploy: {cloud_deploy_link}",
         f"Jira filter: key in ({', '.join(ticket_keys)})"
         if ticket_keys
